@@ -139,6 +139,53 @@ func runFrameParserTests() {
         Check.equal(parser.stats.rejected, 1, "rejected")
     }
 
+    // MARK: - Timestamps
+
+    test("a burst shares one timestamp when no interval is given") {
+        var parser = FrameParser()
+        let burst = SyntheticSource.session(sampleCount: 8)
+        let readings = parser.feed(burst, at: t0)
+
+        Check.equal(readings.count, 8, "frames")
+        Check.isTrue(readings.allSatisfy { $0.timestamp == t0 }, "expected identical stamps")
+    }
+
+    test("a burst is respaced by the sample interval") {
+        var parser = FrameParser()
+        let interval = 1.0 / 200.0
+        let readings = parser.feed(SyntheticSource.session(sampleCount: 8),
+                                   at: t0, sampleInterval: interval)
+
+        // Tolerance is 1 µs: Double seconds-since-1970 near 1.7e9 resolves to
+        // roughly 240 ns, so anything tighter tests the float type, not the code.
+        Check.equal(readings.count, 8, "frames")
+        // Last sample lands at arrival time; the rest step back evenly.
+        Check.close(readings.last!.timestamp.timeIntervalSince1970,
+                    t0.timeIntervalSince1970, 1e-6, "last sample at arrival")
+        for (a, b) in zip(readings, readings.dropFirst()) {
+            Check.close(b.timestamp.timeIntervalSince(a.timestamp), interval, 1e-6, "spacing")
+        }
+    }
+
+    test("timestamps stay strictly increasing across packets") {
+        var parser = FrameParser()
+        let interval = 1.0 / 200.0
+        var all: [Date] = []
+
+        // Deliberately hand back an arrival time that would overlap the previous
+        // batch — the jitter seen in real BLE bursts.
+        for packet in 0..<6 {
+            let arrival = t0.addingTimeInterval(Double(packet) * 0.002)
+            all += parser.feed(SyntheticSource.session(sampleCount: 5),
+                               at: arrival, sampleInterval: interval)
+                .map(\.timestamp)
+        }
+
+        Check.equal(all.count, 30, "samples")
+        let increasing = zip(all, all.dropFirst()).allSatisfy { $1 > $0 }
+        Check.isTrue(increasing, "timestamps went backwards or repeated")
+    }
+
     test("random noise produces almost no readings") {
         var noise = [UInt8]()
         for _ in 0..<20_000 { noise.append(UInt8.random(in: 0...255)) }

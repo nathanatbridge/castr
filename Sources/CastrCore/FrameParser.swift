@@ -50,6 +50,7 @@ public struct FrameParser {
     /// first sample.
     public mutating func reset() {
         buffer.removeAll(keepingCapacity: true)
+        lastTimestamp = nil
     }
 
     public mutating func resetStats() {
@@ -58,10 +59,26 @@ public struct FrameParser {
 
     // MARK: - Parsing
 
+    /// Last timestamp handed out, so reconstructed times stay strictly increasing.
+    private var lastTimestamp: Date?
+
     /// Appends `bytes` and returns every complete frame now available.
     ///
-    /// - Parameter time: arrival timestamp applied to readings from this batch.
-    public mutating func feed(_ bytes: [UInt8], at time: Date = Date()) -> [SensorReading] {
+    /// - Parameters:
+    ///   - time: arrival timestamp of this batch.
+    ///   - sampleInterval: nominal spacing between samples. When supplied, the
+    ///     readings in a batch are spread backwards from `time` at this interval
+    ///     instead of all sharing one timestamp.
+    ///
+    /// BLE delivers samples in bursts, so stamping every frame in a packet with
+    /// its arrival time produces long runs of identical timestamps. Measured on
+    /// a real 200 Hz WitMotion export: only 18% of timestamps were unique, up to
+    /// 21 consecutive samples shared one, and some ran backwards. Any derivative
+    /// taken against that column is meaningless. Spreading by the known interval
+    /// gives a monotonic time base whose aggregate rate stays accurate.
+    public mutating func feed(_ bytes: [UInt8],
+                              at time: Date = Date(),
+                              sampleInterval: TimeInterval? = nil) -> [SensorReading] {
         buffer.append(contentsOf: bytes)
         var readings: [SensorReading] = []
 
@@ -111,7 +128,32 @@ public struct FrameParser {
             readings.append(reading)
         }
 
-        return readings
+        guard let interval = sampleInterval, !readings.isEmpty else {
+            if let last = readings.last { lastTimestamp = last.timestamp }
+            return readings
+        }
+        return respace(readings, endingAt: time, interval: interval)
+    }
+
+    /// Rewrites a batch's timestamps to end at `time`, spaced by `interval`,
+    /// never stepping back past what we've already emitted.
+    private mutating func respace(_ readings: [SensorReading],
+                                  endingAt time: Date,
+                                  interval: TimeInterval) -> [SensorReading] {
+        var start = time.addingTimeInterval(-interval * Double(readings.count - 1))
+        if let last = lastTimestamp, start <= last {
+            start = last.addingTimeInterval(interval)
+        }
+
+        let respaced = readings.enumerated().map { index, r in
+            SensorReading(
+                timestamp: start.addingTimeInterval(interval * Double(index)),
+                accX: r.accX, accY: r.accY, accZ: r.accZ,
+                gyroX: r.gyroX, gyroY: r.gyroY, gyroZ: r.gyroZ,
+                angleX: r.angleX, angleY: r.angleY, angleZ: r.angleZ)
+        }
+        lastTimestamp = respaced.last?.timestamp
+        return respaced
     }
 
     // MARK: - Validity

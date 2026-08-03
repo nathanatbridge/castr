@@ -19,13 +19,25 @@ func runCSVTests() {
 
     func path(_ name: String) -> URL { tempDir.appendingPathComponent(name) }
 
-    test("header matches the WitMotion column names") {
+    test("header matches a real WitMotion export") {
+        // Verified byte-for-byte against the header row of Oven Test WM.xlsx
+        // and Oven Test 256hz.xlsx.
         Check.equal(
             CSVFormat.header,
             "time,DeviceName,AccX(g),AccY(g),AccZ(g),AsX(°/s),AsY(°/s),AsZ(°/s),"
-            + "AngleX(°),AngleY(°),AngleZ(°)",
+            + "AngleX(°),AngleY(°),AngleZ(°),HX(uT),HY(uT),HZ(uT),"
+            + "Q0(),Q1(),Q2(),Q3(),Temperature(°C),Version(),Battery level(%)",
             "header")
-        Check.equal(CSVFormat.columns.count, 11, "column count")
+        Check.equal(CSVFormat.columns.count, 21, "column count")
+    }
+
+    test("undecoded columns are blank, never fabricated") {
+        let row = CSVFormat.row(makeReading(accX: 0.5), deviceName: "d")
+        let fields = row.split(separator: ",", omittingEmptySubsequences: false).map(String.init)
+        Check.equal(fields.count, 21, "field count")
+        for i in CSVFormat.populatedColumnCount..<fields.count {
+            Check.equal(fields[i], "", "column \(CSVFormat.columns[i]) should be empty")
+        }
     }
 
     test("file is valid before close is called") {

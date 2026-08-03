@@ -119,6 +119,13 @@ public final class BLESession: NSObject {
     private var seen = Set<UUID>()
     private var pendingRate: OutputRate?
 
+    /// Nominal spacing between samples, used to spread a BLE burst's timestamps.
+    /// Seeded from `--rate` when given, otherwise measured from the stream.
+    private var sampleInterval: TimeInterval?
+    private var configuredRate: OutputRate?
+    private var rateWindowStart: Date?
+    private var rateWindowCount = 0
+
     /// Serial queue for CoreBluetooth callbacks and parsing.
     public let queue = DispatchQueue(label: "com.castr.ble", qos: .userInitiated)
 
@@ -182,6 +189,10 @@ public final class BLESession: NSObject {
     public func setOutputRate(_ rate: OutputRate) {
         queue.async {
             self.pendingRate = rate
+            self.configuredRate = rate
+            // Seed the timestamp spacing from the rate we asked for, so the very
+            // first samples are spread correctly rather than waiting on a measurement.
+            self.sampleInterval = 1.0 / Double(rate.rawValue)
             self.applyPendingRateIfPossible()
         }
     }
@@ -325,9 +336,37 @@ extension BLESession: CBPeripheralDelegate {
         let bytes = [UInt8](data)
         delegate?.session(self, didReceiveRawPacket: bytes)
 
-        let readings = parser.feed(bytes)
-        if !readings.isEmpty {
-            delegate?.session(self, didReceive: readings)
+        let now = Date()
+        let readings = parser.feed(bytes, at: now, sampleInterval: sampleInterval)
+        guard !readings.isEmpty else { return }
+
+        updateMeasuredInterval(sampleCount: readings.count, now: now)
+        delegate?.session(self, didReceive: readings)
+    }
+
+    /// Learns the sample interval from throughput when `--rate` wasn't given.
+    ///
+    /// Measured over a whole second rather than per packet: BLE bursts make any
+    /// short-window estimate wildly wrong, but the aggregate rate is accurate
+    /// (a real 200 Hz export came in at 198.8 Hz over 38 s).
+    private func updateMeasuredInterval(sampleCount: Int, now: Date) {
+        guard let start = rateWindowStart else {
+            rateWindowStart = now
+            rateWindowCount = sampleCount
+            return
         }
+        rateWindowCount += sampleCount
+        let elapsed = now.timeIntervalSince(start)
+        guard elapsed >= 1.0 else { return }
+
+        let measured = Double(rateWindowCount) / elapsed
+        if measured > 1 {
+            // Only adopt a measured value if the rate wasn't set explicitly.
+            if pendingRate == nil, sampleInterval == nil || configuredRate == nil {
+                sampleInterval = 1.0 / measured
+            }
+        }
+        rateWindowStart = now
+        rateWindowCount = 0
     }
 }

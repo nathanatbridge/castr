@@ -9,12 +9,26 @@ import Foundation
 /// The header is UTF-8 and contains `°` — a classic source of header-matching
 /// failures in pandas when a file is read as latin-1.
 public enum CSVFormat {
+    /// The full 21-column layout, verified against real WitMotion exports
+    /// (`Oven Test WM.xlsx`, `Oven Test 256hz.xlsx`).
+    ///
+    /// Everything past `AngleZ` is emitted **empty**: the 0x55/0x61 frame we
+    /// decode simply doesn't carry magnetometer, quaternion, temperature,
+    /// version or battery. They're present so that analysis code selecting
+    /// these columns by name finds them rather than raising a KeyError — the
+    /// values are blank, never fabricated.
     public static let columns = [
         "time", "DeviceName",
         "AccX(g)", "AccY(g)", "AccZ(g)",
         "AsX(°/s)", "AsY(°/s)", "AsZ(°/s)",
         "AngleX(°)", "AngleY(°)", "AngleZ(°)",
+        "HX(uT)", "HY(uT)", "HZ(uT)",
+        "Q0()", "Q1()", "Q2()", "Q3()",
+        "Temperature(°C)", "Version()", "Battery level(%)",
     ]
+
+    /// Columns we actually populate; the rest are blank placeholders.
+    public static let populatedColumnCount = 11
 
     public static let header = columns.joined(separator: ",")
 
@@ -32,6 +46,9 @@ public enum CSVFormat {
         parts.append(format(r.accX)); parts.append(format(r.accY)); parts.append(format(r.accZ))
         parts.append(format(r.gyroX)); parts.append(format(r.gyroY)); parts.append(format(r.gyroZ))
         parts.append(format(r.angleX)); parts.append(format(r.angleY)); parts.append(format(r.angleZ))
+        // Trailing columns the 0x61 frame doesn't carry.
+        parts.append(contentsOf:
+            Array(repeating: "", count: columns.count - populatedColumnCount))
         return parts.joined(separator: ",")
     }
 }

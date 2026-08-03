@@ -126,6 +126,51 @@ ios/               iOS app sources, parked until Xcode is installed
 `CSVFormat` in `CastrCore/CSVWriter.swift` is the **single** definition of the output
 columns. If `cast_analysis.py` disagrees, that's the only place to change.
 
+## What the oven-test data established
+
+Three WitMotion exports (`Oven Test WM.xlsx`, `Oven Test 256hz.xlsx`, and the copy)
+answered several open questions. They cover **two different sensors**:
+`WT901BLE67(4D7E246CDE8E)` from 10 Feb 2025 and `WT901BLE67(E00C94B5AB6C)` from
+1 May 2025.
+
+**The rate setting works, and 200 Hz is real.** Measured as rows ÷ elapsed span:
+
+| Configured | Sample 1 | Sample 2 |
+|---|---|---|
+| RR200 | 198.8 Hz | 194.3 Hz |
+| RR100 | 99.6 Hz | 100.5 Hz |
+| RR50 | 51.0 Hz | 49.6 Hz |
+
+**The `time` column cannot be used for per-sample timing.** BLE delivers samples in
+bursts and the app stamps them on arrival. In the 200 Hz run: only **18.4%** of
+timestamps were unique, **6161 of 7551** consecutive deltas were exactly zero, up to
+**21 samples shared a single timestamp**, **40 ran backwards**, and gaps reached 720 ms.
+Any velocity, jerk or angular-acceleration figure computed against that column is
+noise. The *aggregate* rate is trustworthy (198.8 vs 200 Hz over 38 s, 0.6% error), so
+a uniform time base reconstructed from the configured rate is the correct approach.
+`castr-collect` does this itself — see `FrameParser.feed(_:at:sampleInterval:)`.
+
+**One of the two sensors is badly out of calibration.** Over rows where the gyro reads
+zero, a resting sensor must show \|acc\| = 1.000 g:
+
+| Sensor | Static rows | median \|acc\| | Error |
+|---|---|---|---|
+| `4D7E246CDE8E` (Feb) | 794 | **1.756 g** | **+73%** |
+| `E00C94B5AB6C` (May) | 5149 | 1.025 g | +2% |
+
+The May sensor is fine. The February one is not, and it's consistent across all 18
+test sheets, so it isn't a transient. This data can't say whether it's a scale error or
+a zero offset: the oven door pivots about one hinge, so every static orientation lies
+on a single arc (the Y axis varies by only 0.019 g across all 794 rows), which is not
+enough geometry to solve for a 3-axis bias — both a sphere fit and an in-plane circle
+fit come back ill-conditioned. **A six-position test would settle it in two minutes**:
+rest the sensor on each face in turn, a few seconds each, and record. That samples all
+six directions and makes the bias and scale separable.
+
+Also confirmed: timestamps are whole milliseconds (every microsecond field is a
+multiple of 1000), so the `.SSS` format here matches; and the real export is **21
+columns**, not the 11 originally assumed.
+
 ## Sensor protocol notes
 
 Service `FFE5`, notify `FFE4`, write `FFE9`. The streaming frame is 20 bytes:
@@ -154,12 +199,15 @@ listed and enabled.
 
 - **Only the 0x55/0x61 frame** is decoded — no magnetometer or quaternion. Those need a
   register read on `FFE9`. `cast_analysis.py` doesn't use them.
-- **Timestamps are host arrival times**, not the sensor's clock. Fine for cast duration
-  and segmentation; not good enough to sync against separate video without checking
-  drift first.
-- **CSV format is unverified against `cast_analysis.py`** — the script isn't in this
-  repo. The header string is in `CSVFormat.columns`; it's UTF-8 and contains `°`, a
-  common cause of header-matching failures if a file gets read as latin-1.
+- **Timestamps are reconstructed**, not from the sensor's clock. Samples in a BLE burst
+  are spread backwards from packet arrival at the nominal interval, which makes them
+  monotonic and keeps the aggregate rate accurate — but the absolute time of any single
+  sample is still only as good as the host clock. Fine for cast duration and
+  segmentation; check drift before syncing against separate video.
+- **Column names match the real WitMotion export, but `cast_analysis.py` itself is
+  still unseen.** The nine channels we decode carry real values; the other ten columns
+  are present and blank. The header is UTF-8 and contains `°`, a common cause of
+  header-matching failures if a file gets read as latin-1.
 - **BLE range** is roughly 10 m, so Mac-tethered collection means the laptop comes
   outside with you. That's what the iOS app is for.
 
