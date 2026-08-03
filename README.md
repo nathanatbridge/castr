@@ -37,6 +37,7 @@ samples rather than the whole session.
 
 ```
 -o, --out <path>     Write CSV here (default: ./CastR_<timestamp>.csv)
+    --check          Health check: is the sensor reading 1 g at rest?
     --raw            Hex-dump packets instead of parsing
     --any            List every BLE peripheral, not just WitMotion ones
     --replay <file>  Feed a hex fixture through the parser; no hardware
@@ -79,11 +80,26 @@ Save a few lines of that output.
 **3. Does it read sane values at rest?**
 
 ```sh
-./.build/debug/castr-collect --seconds 20 -o rest.csv    # sensor flat on a table
+./.build/debug/castr-collect --check     # sensor flat on a table, don't touch it
 ```
 
-Acceleration should sit near (0, 0, 1) g — magnitude ~1.0 — and gyro near zero. This is
-the check that scaling and framing are both right. Rejected frames should be 0.
+A resting accelerometer must measure exactly 1 g. That one fact catches scale errors,
+zero-offset drift and framing bugs at once, which is why this is the gate before any
+real recording:
+
+```
+  samples          2984 over 15.0s  (199 Hz)
+  [ok  ] stillness    gyro mean 0.04 °/s, peak 0.31 °/s
+  [ok  ] gravity      |acc| median 1.008 g  (+0.8% vs 1.000 g)
+       axes         X +0.012  Y -0.004  Z +1.007
+  [ok  ] framing      0 rejected frames
+
+  PASS — sensor is reading correctly. Good to record.
+```
+
+Exit status is non-zero on FAIL, so it can gate a script. **The February 2025 oven
+session would have failed this** at 1.756 g. If it does fail, run the acceleration
+calibration in the WitMotion app with the sensor still, then re-check.
 
 **4. Does rotation track?** Rotate 90° by hand and confirm the angle columns follow.
 
@@ -129,9 +145,15 @@ columns. If `cast_analysis.py` disagrees, that's the only place to change.
 ## What the oven-test data established
 
 Three WitMotion exports (`Oven Test WM.xlsx`, `Oven Test 256hz.xlsx`, and the copy)
-answered several open questions. They cover **two different sensors**:
-`WT901BLE67(4D7E246CDE8E)` from 10 Feb 2025 and `WT901BLE67(E00C94B5AB6C)` from
-1 May 2025.
+answered several open questions. They are **one sensor across two sessions**:
+10 Feb 2025 and 1 May 2025. The bracketed identifier differs between them
+(`4D7E246CDE8E` vs `E00C94B5AB6C`) but the firmware (`10080.1.13`) and ambient
+temperature match, and the identifier is constant within each session — iOS hands out
+a per-install CoreBluetooth UUID rather than the sensor's real MAC, so the same unit
+appears under a new name after a reinstall or re-pair.
+
+Practical consequence: **don't key anything off the bracketed identifier.** Match on
+the `WT901` name prefix instead, which is what `castr-collect` does.
 
 **The rate setting works, and 200 Hz is real.** Measured as rows ÷ elapsed span:
 
@@ -150,22 +172,27 @@ noise. The *aggregate* rate is trustworthy (198.8 vs 200 Hz over 38 s, 0.6% erro
 a uniform time base reconstructed from the configured rate is the correct approach.
 `castr-collect` does this itself — see `FrameParser.feed(_:at:sampleInterval:)`.
 
-**One of the two sensors is badly out of calibration.** Over rows where the gyro reads
-zero, a resting sensor must show \|acc\| = 1.000 g:
+**The sensor's accelerometer calibration changed between the two sessions.** Over rows
+where the gyro reads zero, a resting sensor must show \|acc\| = 1.000 g:
 
-| Sensor | Static rows | median \|acc\| | Error |
+| Session | Static rows | median \|acc\| | Error |
 |---|---|---|---|
-| `4D7E246CDE8E` (Feb) | 794 | **1.756 g** | **+73%** |
-| `E00C94B5AB6C` (May) | 5149 | 1.025 g | +2% |
+| Feb 2025 | 794 | **1.756 g** | **+73%** |
+| May 2025 | 5149 | 1.025 g | +2% |
 
-The May sensor is fine. The February one is not, and it's consistent across all 18
-test sheets, so it isn't a transient. This data can't say whether it's a scale error or
-a zero offset: the oven door pivots about one hinge, so every static orientation lies
-on a single arc (the Y axis varies by only 0.019 g across all 794 rows), which is not
-enough geometry to solve for a 3-axis bias — both a sphere fit and an in-plane circle
-fit come back ill-conditioned. **A six-position test would settle it in two minutes**:
-rest the sensor on each face in turn, a few seconds each, and record. That samples all
-six directions and makes the bias and scale separable.
+Same unit, same firmware. The February figure is consistent across all 18 test sheets,
+so it wasn't a transient — that session's acceleration data is unusable in absolute
+terms. By May it was healthy. The most likely explanation is that an acceleration
+calibration was run in the WitMotion app in between; whatever the cause, the good state
+is the more recent one.
+
+This data can't decompose the February error into scale versus zero offset: the oven
+door pivots about a single hinge, so every static orientation lies on one arc (the Y
+axis varies by only 0.019 g across all 794 rows). Both a sphere fit and an in-plane
+circle fit come back ill-conditioned, so no bias vector is reported here.
+
+Both sessions are over a year old, so **neither tells you the sensor's state today**.
+`castr-collect --check` answers that in 15 seconds — see below.
 
 Also confirmed: timestamps are whole milliseconds (every microsecond field is a
 multiple of 1000), so the `.SSS` format here matches; and the real export is **21

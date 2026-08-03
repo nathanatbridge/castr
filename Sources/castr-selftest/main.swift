@@ -38,6 +38,8 @@ print("castr-selftest — parser and CSV checks, no hardware required\n")
 runFrameParserTests()
 print("")
 runCSVTests()
+print("")
+runStaticCheckTests()
 
 print("")
 if Check.failed == 0 {

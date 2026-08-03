@@ -48,6 +48,8 @@ final class Collector: NSObject {
     private var statusLine = "starting up…"
     private var rawPackets = 0
     private var ticks = 0
+    /// Retained only in --check mode; a 15s window at 200 Hz is ~3000 samples.
+    private var checkSamples: [SensorReading] = []
 
     private var didFinish = false
 
@@ -64,7 +66,14 @@ final class Collector: NSObject {
             Term.log("Look for your sensor's name, and whether it advertises FFE5.\n")
         }
 
-        if !options.rawMode && !options.listAll {
+        if options.checkMode {
+            Term.log("""
+                Health check — leave the sensor completely still on a flat surface.
+                Measuring for \(Int(options.duration ?? 15)) seconds…
+                """)
+        }
+
+        if !options.rawMode && !options.listAll && !options.checkMode {
             let url = options.outputPath.map { URL(fileURLWithPath: $0) }
                 ?? Options.defaultOutputURL()
             do {
@@ -80,9 +89,11 @@ final class Collector: NSObject {
             Term.log("Will set output rate to \(rate.rawValue) Hz once connected.")
         }
 
-        if let seconds = options.duration {
+        // --check is time-boxed by definition; --seconds overrides the default.
+        let limit = options.duration ?? (options.checkMode ? 15 : nil)
+        if let seconds = limit {
             DispatchQueue.main.asyncAfter(deadline: .now() + seconds) { [weak self] in
-                self?.finish(reason: "reached --seconds \(Int(seconds))")
+                self?.finish(reason: "reached \(Int(seconds))s limit")
             }
         }
 
@@ -152,6 +163,62 @@ final class Collector: NSObject {
         Term.status(parts.joined(separator: "   "))
     }
 
+    private func reportHealthCheck(rejected: Int) {
+        lock.lock()
+        let samples = checkSamples
+        lock.unlock()
+
+        guard let r = StaticCheck.evaluate(samples, rejectedFrames: rejected) else {
+            Term.log("\nNo data received — the sensor never streamed. "
+                     + "Run --any to confirm it's advertising.")
+            exit(1)
+        }
+
+        let mark: (StaticCheck.Verdict) -> String = { v in
+            switch v {
+            case .pass: return "ok  "
+            case .warn: return "warn"
+            case .fail: return "FAIL"
+            }
+        }
+
+        Term.log("")
+        Term.log("  samples          \(r.sampleCount) over \(String(format: "%.1f", r.duration))s"
+                 + "  (\(String(format: "%.0f", r.effectiveRateHz)) Hz)")
+        Term.log("  [\(mark(r.stillness))] stillness    gyro mean "
+                 + String(format: "%.2f", r.gyroMeanMagnitude) + " °/s, peak "
+                 + String(format: "%.2f", r.gyroMaxMagnitude) + " °/s")
+        Term.log("  [\(mark(r.calibration))] gravity      |acc| median "
+                 + String(format: "%.3f", r.medianAccMagnitude) + " g  ("
+                 + String(format: "%+.1f", r.calibrationErrorPercent) + "% vs 1.000 g)")
+        Term.log("       axes         X " + String(format: "%+.3f", r.meanAccX)
+                 + "  Y " + String(format: "%+.3f", r.meanAccY)
+                 + "  Z " + String(format: "%+.3f", r.meanAccZ))
+        Term.log("  [\(mark(rejected == 0 ? .pass : .warn))] framing      "
+                 + "\(rejected) rejected frames")
+        Term.log("")
+
+        switch r.overall {
+        case .pass:
+            Term.log("  PASS — sensor is reading correctly. Good to record.")
+        case .warn:
+            Term.log("  WARN — usable, but check the flagged lines above.")
+        case .fail:
+            if r.stillness == .fail {
+                Term.log("  FAIL — the sensor was moving, so gravity couldn't be measured.")
+                Term.log("         Put it flat on a table, don't touch it, and rerun.")
+            } else {
+                Term.log("  FAIL — at rest this must read 1.000 g and it doesn't.")
+                Term.log("         Absolute acceleration from this sensor is not")
+                Term.log("         trustworthy until it's recalibrated. Run the")
+                Term.log("         acceleration calibration in the WitMotion app,")
+                Term.log("         leave the sensor still while it runs, then recheck.")
+                Term.log("         (The Feb 2025 oven session read 1.756 g like this.)")
+            }
+        }
+        exit(r.overall == .fail ? 1 : 0)
+    }
+
     /// Idempotent shutdown: flush and close the CSV, then exit.
     func finish(reason: String) {
         guard !didFinish else { return }
@@ -170,6 +237,12 @@ final class Collector: NSObject {
         w?.close()
 
         let stats = session.parserStats
+
+        if options.checkMode {
+            reportHealthCheck(rejected: stats.rejected)
+            return
+        }
+
         Term.log("Stopped (\(reason)).")
 
         if let url = w?.url {
@@ -236,6 +309,7 @@ extension Collector: BLESessionDelegate {
     func session(_ session: BLESession, didReceive readings: [SensorReading]) {
         lock.lock()
         writer?.write(readings)
+        if options.checkMode { checkSamples.append(contentsOf: readings) }
         totalSamples += readings.count
         windowSamples += readings.count
         latest = readings.last
