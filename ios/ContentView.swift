@@ -1,12 +1,14 @@
 import SwiftUI
 import CoreBluetooth
+import CastrCore
+import CastrBLE
 
 struct ContentView: View {
-    @StateObject private var ble = BLEManager()
-    @State private var csvToShare: CSVFile?
+    @StateObject private var ble = ObservableBLE()
+    @State private var shareURL: ShareableCSV?
 
     var body: some View {
-        NavigationView {
+        NavigationStack {
             VStack(spacing: 16) {
                 statusSection
 
@@ -20,7 +22,7 @@ struct ContentView: View {
                 Spacer()
             }
             .padding()
-            .navigationTitle("CastR Data Collector")
+            .navigationTitle("CastR")
         }
     }
 
@@ -31,7 +33,7 @@ struct ContentView: View {
                 .frame(width: 10, height: 10)
             Text(ble.statusMessage)
                 .font(.footnote)
-                .foregroundColor(.secondary)
+                .foregroundStyle(.secondary)
             Spacer()
         }
     }
@@ -44,11 +46,17 @@ struct ContentView: View {
             .buttonStyle(.borderedProminent)
             .disabled(!ble.isBluetoothReady)
 
-            List(ble.discoveredPeripherals, id: \.identifier) { peripheral in
+            List(ble.devices, id: \.peripheral.identifier) { device in
                 Button {
-                    ble.connect(to: peripheral)
+                    ble.connect(to: device)
                 } label: {
-                    Text(peripheral.name ?? "Unnamed device")
+                    HStack {
+                        Text(device.name)
+                        Spacer()
+                        Text("\(device.rssi) dBm")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                 }
             }
             .listStyle(.plain)
@@ -64,10 +72,11 @@ struct ContentView: View {
                     Text(String(format: "Acc  (g):  X %.2f   Y %.2f   Z %.2f", r.accX, r.accY, r.accZ))
                     Text(String(format: "Gyro (°/s): X %.1f   Y %.1f   Z %.1f", r.gyroX, r.gyroY, r.gyroZ))
                     Text(String(format: "Angle (°): X %.1f   Y %.1f   Z %.1f", r.angleX, r.angleY, r.angleZ))
+                    Text(String(format: "Rate: %.0f Hz", ble.measuredRateHz))
                 }
                 .font(.system(.body, design: .monospaced))
             } else {
-                Text("Waiting for data...").foregroundColor(.secondary)
+                Text("Waiting for data…").foregroundStyle(.secondary)
             }
 
             Button("Disconnect") { ble.disconnect() }
@@ -80,9 +89,18 @@ struct ContentView: View {
         VStack(alignment: .leading, spacing: 12) {
             Divider()
             Text("Recording").font(.headline)
-            Text("\(ble.recordedReadings.count) samples captured")
-                .font(.footnote)
-                .foregroundColor(.secondary)
+
+            HStack(spacing: 12) {
+                Text("\(ble.sampleCount) samples")
+                // A non-zero reject count means framing has slipped and the file
+                // can't be trusted — surface it rather than hiding it.
+                if ble.rejectedFrames > 0 {
+                    Label("\(ble.rejectedFrames) rejected", systemImage: "exclamationmark.triangle")
+                        .foregroundStyle(.orange)
+                }
+            }
+            .font(.footnote)
+            .foregroundStyle(.secondary)
 
             HStack {
                 Button(ble.isRecording ? "Stop" : "Start Recording") {
@@ -92,32 +110,35 @@ struct ContentView: View {
                 .tint(ble.isRecording ? .red : .green)
 
                 Button("Export CSV") {
-                    let csv = ble.exportCSV()
-                    csvToShare = CSVFile(content: csv)
+                    // Recording streams straight to this file, so there's nothing
+                    // to serialize here — just hand over the URL.
+                    if let url = ble.recordingURL {
+                        shareURL = ShareableCSV(url: url)
+                    }
                 }
                 .buttonStyle(.bordered)
-                .disabled(ble.recordedReadings.isEmpty)
+                .disabled(ble.isRecording || ble.recordingURL == nil)
+            }
+
+            if let error = ble.lastError {
+                Text(error).font(.caption).foregroundStyle(.red)
             }
         }
-        .sheet(item: $csvToShare) { file in
-            ShareSheet(activityItems: [file.fileURL])
+        .sheet(item: $shareURL) { item in
+            ShareSheet(activityItems: [item.url])
         }
     }
 }
 
-/// Wraps CSV text as a temp file so it can be shared via the system share sheet.
-struct CSVFile: Identifiable {
-    let id = UUID()
-    let content: String
-
-    var fileURL: URL {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyy-MM-dd_HH-mm-ss"
-        let name = "CastR_\(formatter.string(from: Date())).csv"
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent(name)
-        try? content.write(to: url, atomically: true, encoding: .utf8)
-        return url
-    }
+/// Identifiable wrapper so a URL can drive `.sheet(item:)`.
+///
+/// The previous version computed its URL in a getter that *wrote the file as a
+/// side effect* — SwiftUI may evaluate a computed property on every render, so
+/// that re-serialized the whole session repeatedly. The file now already exists
+/// on disk; this just points at it.
+struct ShareableCSV: Identifiable {
+    let url: URL
+    var id: String { url.path }
 }
 
 /// Thin UIKit bridge for the standard iOS share sheet.
