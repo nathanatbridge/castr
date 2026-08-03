@@ -40,6 +40,8 @@ print("")
 runCSVTests()
 print("")
 runStaticCheckTests()
+print("")
+runSaturationTests()
 
 print("")
 if Check.failed == 0 {

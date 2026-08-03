@@ -50,6 +50,7 @@ final class Collector: NSObject {
     private var ticks = 0
     /// Retained only in --check mode; a 15s window at 200 Hz is ~3000 samples.
     private var checkSamples: [SensorReading] = []
+    private var saturation = SaturationCounter()
     private var didStartConnecting = false
     private var didArmCheckTimer = false
 
@@ -180,6 +181,40 @@ final class Collector: NSObject {
         Term.status(parts.joined(separator: "   "))
     }
 
+    /// Peaks and clipping. Clipped samples are pinned at full scale and look
+    /// like ordinary data, so this has to be said out loud or it goes unnoticed.
+    private func reportSaturation() {
+        lock.lock()
+        let s = saturation
+        lock.unlock()
+        guard s.total > 0 else { return }
+
+        Term.log(String(format: "Peak |acc| %.2f g of %.0f    peak |gyro| %.0f °/s of %.0f",
+                        s.peakAccMagnitude, FrameParser.accelFullScaleG,
+                        s.peakGyroMagnitude, FrameParser.gyroFullScaleDPS))
+
+        if s.didClip {
+            Term.log("")
+            Term.log("  WARNING — the sensor hit its measurement limit.")
+            if s.accClipped > 0 {
+                Term.log(String(format: "    %d samples (%.1f%%) clipped at ±%.0f g",
+                                s.accClipped, s.accClippedPercent,
+                                FrameParser.accelFullScaleG))
+            }
+            if s.gyroClipped > 0 {
+                Term.log(String(format: "    %d samples (%.1f%%) clipped at ±%.0f °/s",
+                                s.gyroClipped, s.gyroClippedPercent,
+                                FrameParser.gyroFullScaleDPS))
+            }
+            Term.log("    Clipped values are pinned at full scale, so your peaks")
+            Term.log("    read LOW and the file doesn't say so. Move the sensor")
+            Term.log("    closer to the rod butt, where it sees less of the swing.")
+        } else if s.isNearLimit {
+            Term.log("  note: peaks are within 20% of full scale — a harder cast "
+                     + "would likely clip.")
+        }
+    }
+
     private func reportHealthCheck(rejected: Int) {
         lock.lock()
         let samples = checkSamples
@@ -271,6 +306,7 @@ final class Collector: NSObject {
             if stats.rejected > 0 {
                 Term.log("note: rejected frames are non-zero — run --raw to check framing.")
             }
+            reportSaturation()
         }
         exit(0)
     }
@@ -335,6 +371,7 @@ extension Collector: BLESessionDelegate {
     func session(_ session: BLESession, didReceive readings: [SensorReading]) {
         lock.lock()
         writer?.write(readings)
+        saturation.observe(readings)
         if options.checkMode {
             checkSamples.append(contentsOf: readings)
             startCheckWindowIfNeeded()
