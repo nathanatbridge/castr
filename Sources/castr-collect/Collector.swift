@@ -50,6 +50,7 @@ final class Collector: NSObject {
     private var ticks = 0
     /// Retained only in --check mode; a 15s window at 200 Hz is ~3000 samples.
     private var checkSamples: [SensorReading] = []
+    private var didStartConnecting = false
 
     private var didFinish = false
 
@@ -298,6 +299,15 @@ extension Collector: BLESessionDelegate {
            !device.name.lowercased().contains(filter.lowercased()) {
             return
         }
+
+        // Discoveries already queued before stopScan() takes effect would
+        // otherwise each fire a connect, and the last one would win — silently
+        // attaching to whichever device happened to be reported last.
+        lock.lock()
+        let alreadyConnecting = didStartConnecting
+        didStartConnecting = true
+        lock.unlock()
+        guard !alreadyConnecting else { return }
 
         Term.log("  connecting to \(device.name)…")
         session.connect(to: device.peripheral)
