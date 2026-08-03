@@ -51,6 +51,7 @@ final class Collector: NSObject {
     /// Retained only in --check mode; a 15s window at 200 Hz is ~3000 samples.
     private var checkSamples: [SensorReading] = []
     private var didStartConnecting = false
+    private var didArmCheckTimer = false
 
     private var didFinish = false
 
@@ -90,16 +91,31 @@ final class Collector: NSObject {
             Term.log("Will set output rate to \(rate.rawValue) Hz once connected.")
         }
 
-        // --check is time-boxed by definition; --seconds overrides the default.
-        let limit = options.duration ?? (options.checkMode ? 15 : nil)
-        if let seconds = limit {
-            DispatchQueue.main.asyncAfter(deadline: .now() + seconds) { [weak self] in
-                self?.finish(reason: "reached \(Int(seconds))s limit")
-            }
+        // --check measures a window of *data*, so its clock starts on the first
+        // sample rather than at launch — scanning and connecting can eat several
+        // seconds, which would otherwise silently shorten the measurement.
+        if !options.checkMode, let seconds = options.duration {
+            armStopTimer(after: seconds)
         }
 
         startStatusTimer()
         session.startScan()
+    }
+
+    private func armStopTimer(after seconds: TimeInterval) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + seconds) { [weak self] in
+            self?.finish(reason: "reached \(Int(seconds))s limit")
+        }
+    }
+
+    /// Starts the --check countdown once data is actually flowing.
+    private func startCheckWindowIfNeeded() {
+        guard options.checkMode, !didArmCheckTimer else { return }
+        didArmCheckTimer = true
+        let seconds = options.duration ?? 15
+        DispatchQueue.main.async { [weak self] in
+            self?.armStopTimer(after: seconds)
+        }
     }
 
     private func startStatusTimer() {
@@ -319,7 +335,10 @@ extension Collector: BLESessionDelegate {
     func session(_ session: BLESession, didReceive readings: [SensorReading]) {
         lock.lock()
         writer?.write(readings)
-        if options.checkMode { checkSamples.append(contentsOf: readings) }
+        if options.checkMode {
+            checkSamples.append(contentsOf: readings)
+            startCheckWindowIfNeeded()
+        }
         totalSamples += readings.count
         windowSamples += readings.count
         latest = readings.last

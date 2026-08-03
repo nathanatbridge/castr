@@ -57,6 +57,12 @@ struct Options {
 
         while index < args.count {
             let arg = args[index]
+
+            // zsh doesn't honour `#` comments in interactive shells (unlike bash),
+            // so pasting an annotated command line hands us the comment as
+            // arguments. `#` can never be a valid option, so treat it as one.
+            if arg.hasPrefix("#") { break }
+
             switch arg {
             case "-o", "--out":     options.outputPath = try next(arg)
             case "--raw":           options.rawMode = true
