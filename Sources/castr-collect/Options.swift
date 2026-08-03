@@ -10,6 +10,7 @@ struct Options {
     var deviceName: String?
     var duration: TimeInterval?
     var checkMode = false
+    var despike = false
     var showHelp = false
 
     static let usage = """
@@ -23,6 +24,9 @@ struct Options {
           --check          Health check: leave the sensor still for 15s and this
                            reports whether it reads the 1.000 g it must at rest.
                            Run this before trusting any session.
+          --despike        Drop corrupt single-sample spikes. The frame format
+                           has no checksum, so ~1 sample in 4000 can be garbage;
+                           left in, they distort peaks and derivatives.
           --raw            Hex-dump packets instead of parsing. Bring-up step 2:
                            confirms the sensor really sends 20-byte 55 61 frames.
           --any            List every BLE peripheral, not just WitMotion ones.
@@ -38,7 +42,7 @@ struct Options {
       castr-collect --any                    # what is my sensor called?
       castr-collect --raw                    # what do its packets look like?
       castr-collect --check                  # is it reading correctly?
-      castr-collect -o backyard.csv          # record until Ctrl-C
+      castr-collect -o backyard.csv --despike   # record a clean cast
       castr-collect --replay fixture.hex -o synthetic.csv
 
     Recording streams to disk continuously — the CSV is valid even if this
@@ -68,6 +72,7 @@ struct Options {
             case "--raw":           options.rawMode = true
             case "--any":           options.listAll = true
             case "--check":         options.checkMode = true
+            case "--despike":       options.despike = true
             case "--replay":        options.replayPath = try next(arg)
             case "--device":        options.deviceName = try next(arg)
             case "--seconds":

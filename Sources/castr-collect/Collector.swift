@@ -51,6 +51,7 @@ final class Collector: NSObject {
     /// Retained only in --check mode; a 15s window at 200 Hz is ~3000 samples.
     private var checkSamples: [SensorReading] = []
     private var saturation = SaturationCounter()
+    private lazy var glitches = GlitchFilter(dropsGlitches: options.despike)
     private var didStartConnecting = false
     private var didArmCheckTimer = false
 
@@ -186,12 +187,25 @@ final class Collector: NSObject {
     private func reportSaturation() {
         lock.lock()
         let s = saturation
+        let g = glitches
         lock.unlock()
         guard s.total > 0 else { return }
 
         Term.log(String(format: "Peak |acc| %.2f g of %.0f    peak |gyro| %.0f °/s of %.0f",
                         s.peakAccMagnitude, FrameParser.accelFullScaleG,
                         s.peakGyroMagnitude, FrameParser.gyroFullScaleDPS))
+
+        if g.glitchCount > 0 {
+            Term.log(String(format: "  %d corrupt sample%@ detected (%.3f%%)%@",
+                            g.glitchCount, g.glitchCount == 1 ? "" : "s",
+                            g.glitchPercent,
+                            options.despike ? " — removed" : " — KEPT"))
+            if !options.despike {
+                Term.log("    These are single-sample spikes the frame format can't")
+                Term.log("    checksum away. They will distort any peak or derivative.")
+                Term.log("    Re-record with --despike to drop them.")
+            }
+        }
 
         if s.didClip {
             Term.log("")
@@ -281,6 +295,11 @@ final class Collector: NSObject {
         Term.endStatus()
 
         lock.lock()
+        // Release the sample still held by the glitch filter's lookahead.
+        let tail = glitches.flush()
+        writer?.write(tail)
+        saturation.observe(tail)
+        totalSamples += tail.count
         let w = writer
         writer = nil
         let total = totalSamples
@@ -370,15 +389,19 @@ extension Collector: BLESessionDelegate {
 
     func session(_ session: BLESession, didReceive readings: [SensorReading]) {
         lock.lock()
-        writer?.write(readings)
-        saturation.observe(readings)
+        // Passes through the glitch filter first so a corrupt single-sample
+        // spike can't masquerade as the session's peak. Output lags by one
+        // sample; flush() releases the tail at shutdown.
+        let settled = glitches.push(readings)
+        writer?.write(settled)
+        saturation.observe(settled)
         if options.checkMode {
-            checkSamples.append(contentsOf: readings)
+            checkSamples.append(contentsOf: settled)
             startCheckWindowIfNeeded()
         }
-        totalSamples += readings.count
-        windowSamples += readings.count
-        latest = readings.last
+        totalSamples += settled.count
+        windowSamples += settled.count
+        latest = settled.last ?? latest
         lock.unlock()
     }
 
