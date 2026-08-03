@@ -57,6 +57,36 @@ public struct FrameParser {
         stats = Stats()
     }
 
+    /// Tells the parser what the last emitted timestamp was, so that readings
+    /// respaced elsewhere (see `respace(_:endingAt:interval:startingAfter:)`)
+    /// stay ordered with the ones it produces afterwards.
+    public mutating func seedLastTimestamp(_ date: Date) {
+        lastTimestamp = date
+    }
+
+    /// Assigns evenly spaced timestamps to a batch, ending at `time`.
+    ///
+    /// Exposed because the sample interval isn't known at the very start of a
+    /// session: the first readings have to be held and spaced retroactively
+    /// once the rate has been established.
+    public static func respace(_ readings: [SensorReading],
+                               endingAt time: Date,
+                               interval: TimeInterval,
+                               startingAfter previous: Date? = nil) -> [SensorReading] {
+        guard !readings.isEmpty else { return [] }
+        var start = time.addingTimeInterval(-interval * Double(readings.count - 1))
+        if let previous, start <= previous {
+            start = previous.addingTimeInterval(interval)
+        }
+        return readings.enumerated().map { index, r in
+            SensorReading(
+                timestamp: start.addingTimeInterval(interval * Double(index)),
+                accX: r.accX, accY: r.accY, accZ: r.accZ,
+                gyroX: r.gyroX, gyroY: r.gyroY, gyroZ: r.gyroZ,
+                angleX: r.angleX, angleY: r.angleY, angleZ: r.angleZ)
+        }
+    }
+
     // MARK: - Parsing
 
     /// Last timestamp handed out, so reconstructed times stay strictly increasing.
@@ -132,26 +162,8 @@ public struct FrameParser {
             if let last = readings.last { lastTimestamp = last.timestamp }
             return readings
         }
-        return respace(readings, endingAt: time, interval: interval)
-    }
-
-    /// Rewrites a batch's timestamps to end at `time`, spaced by `interval`,
-    /// never stepping back past what we've already emitted.
-    private mutating func respace(_ readings: [SensorReading],
-                                  endingAt time: Date,
-                                  interval: TimeInterval) -> [SensorReading] {
-        var start = time.addingTimeInterval(-interval * Double(readings.count - 1))
-        if let last = lastTimestamp, start <= last {
-            start = last.addingTimeInterval(interval)
-        }
-
-        let respaced = readings.enumerated().map { index, r in
-            SensorReading(
-                timestamp: start.addingTimeInterval(interval * Double(index)),
-                accX: r.accX, accY: r.accY, accZ: r.accZ,
-                gyroX: r.gyroX, gyroY: r.gyroY, gyroZ: r.gyroZ,
-                angleX: r.angleX, angleY: r.angleY, angleZ: r.angleZ)
-        }
+        let respaced = Self.respace(readings, endingAt: time,
+                                    interval: interval, startingAfter: lastTimestamp)
         lastTimestamp = respaced.last?.timestamp
         return respaced
     }

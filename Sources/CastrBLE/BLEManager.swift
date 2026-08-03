@@ -126,6 +126,15 @@ public final class BLESession: NSObject {
     private var rateWindowStart: Date?
     private var rateWindowCount = 0
 
+    /// Readings held at the start of a session until the rate is known.
+    private struct HeldBatch {
+        let readings: [SensorReading]
+        let arrival: Date
+    }
+    private var bootstrap: [HeldBatch] = []
+    /// Longest we'll withhold data waiting for the rate to settle.
+    private let bootstrapTimeout: TimeInterval = 2.0
+
     /// Serial queue for CoreBluetooth callbacks and parsing.
     public let queue = DispatchQueue(label: "com.castr.ble", qos: .userInitiated)
 
@@ -286,6 +295,9 @@ extension BLESession: CBCentralManagerDelegate {
                                didDisconnectPeripheral peripheral: CBPeripheral,
                                error: Error?) {
         parser.reset()
+        bootstrap.removeAll()
+        rateWindowStart = nil
+        rateWindowCount = 0
         self.peripheral = nil
         writeCharacteristic = nil
         state = .disconnected(error?.localizedDescription)
@@ -340,8 +352,42 @@ extension BLESession: CBPeripheralDelegate {
         let readings = parser.feed(bytes, at: now, sampleInterval: sampleInterval)
         guard !readings.isEmpty else { return }
 
+        // Until the sample interval is known, every reading in a packet would
+        // share one arrival timestamp — which yields dt = 0 and blows up any
+        // derivative downstream. Hold them instead and space them retroactively
+        // once the rate is established. `--rate` skips this entirely by seeding
+        // the interval up front.
+        if sampleInterval == nil {
+            bootstrap.append(HeldBatch(readings: readings, arrival: now))
+            updateMeasuredInterval(sampleCount: readings.count, now: now)
+            flushBootstrapIfReady(now: now)
+            return
+        }
+
         updateMeasuredInterval(sampleCount: readings.count, now: now)
         delegate?.session(self, didReceive: readings)
+    }
+
+    /// Emits held readings once the rate is known, or passes them through
+    /// unchanged if it never settles.
+    private func flushBootstrapIfReady(now: Date) {
+        if let interval = sampleInterval {
+            let all = bootstrap.flatMap(\.readings)
+            let end = bootstrap.last?.arrival ?? now
+            bootstrap.removeAll()
+
+            let respaced = FrameParser.respace(all, endingAt: end, interval: interval)
+            if let last = respaced.last?.timestamp { parser.seedLastTimestamp(last) }
+            if !respaced.isEmpty { delegate?.session(self, didReceive: respaced) }
+            return
+        }
+
+        // Never hold data hostage: if the rate can't be established, emit what
+        // we have rather than losing it.
+        let waited = bootstrap.first.map { now.timeIntervalSince($0.arrival) } ?? 0
+        guard waited > bootstrapTimeout else { return }
+        for entry in bootstrap { delegate?.session(self, didReceive: entry.readings) }
+        bootstrap.removeAll()
     }
 
     /// Learns the sample interval from throughput when `--rate` wasn't given.
@@ -357,7 +403,9 @@ extension BLESession: CBPeripheralDelegate {
         }
         rateWindowCount += sampleCount
         let elapsed = now.timeIntervalSince(start)
-        guard elapsed >= 1.0 else { return }
+        // Settle fast on the first estimate so held samples are released
+        // promptly, then use a longer window for refinement.
+        guard elapsed >= (sampleInterval == nil ? 0.4 : 1.0) else { return }
 
         let measured = Double(rateWindowCount) / elapsed
         if measured > 1 {
