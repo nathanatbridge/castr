@@ -221,8 +221,18 @@ final class Collector: NSObject {
                                 FrameParser.gyroFullScaleDPS))
             }
             Term.log("    Clipped values are pinned at full scale, so your peaks")
-            Term.log("    read LOW and the file doesn't say so. Move the sensor")
-            Term.log("    closer to the rod butt, where it sees less of the swing.")
+            Term.log("    read LOW and the file doesn't say so.")
+            if s.accClipped > 0 {
+                Term.log("    Acceleration scales with distance from the pivot, so")
+                Term.log("    mounting closer to the hand reduces it.")
+            }
+            if s.gyroClipped > 0 {
+                // Angular velocity is a property of the rigid body, identical at
+                // every point on it — so relocating the sensor cannot reduce it.
+                Term.log("    Rotation rate is the same everywhere on a rigid rod,")
+                Term.log("    so moving the sensor will NOT help. ±2000 °/s is the")
+                Term.log("    hardware limit; the stroke has outrun the sensor.")
+            }
         } else if s.isNearLimit {
             Term.log("  note: peaks are within 20% of full scale — a harder cast "
                      + "would likely clip.")

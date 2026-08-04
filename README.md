@@ -198,6 +198,30 @@ Also confirmed: timestamps are whole milliseconds (every microsecond field is a
 multiple of 1000), so the `.SSS` format here matches; and the real export is **21
 columns**, not the 11 originally assumed.
 
+## Mounting
+
+**On the rod, immediately above the cork handle.** This is the fixed position — keep it
+consistent, because everything derived from the data depends on it.
+
+What that position measures, and what it doesn't:
+
+- **Rotation rate is location-independent.** Angular velocity is a property of the whole
+  rigid rod, identical at every point on it. The gyroscope reads the same whether the
+  sensor sits at the handle or the tip — so a mount change cannot fix gyro clipping, and
+  ±2000 °/s is a hard ceiling on how fast a stroke can be measured.
+- **Acceleration is not.** It scales with distance from the pivot
+  (`a = ω×(ω×r) + α×r`), which is exactly why this position is a good choice: the
+  3 Aug session peaked at 26% of the ±16 g range where a tip mount would likely have
+  saturated.
+- **This measures the caster's input, not the rod's output.** The handle is what your
+  hand does. The tip path is that input plus rod flex, and flex is not observable from
+  here — inferring tip position would require a rod model this project doesn't have.
+
+The reconstruction in `tools/reconstruct.py` fits an effective arm from sensor to pivot.
+On the 3 Aug session that came out at **24–31 cm**, consistent across the clean events,
+which places the pivot around the wrist. Expect that number to stay stable across
+sessions; a large change means the mount moved or the stroke recruited a different joint.
+
 ## Sensor protocol notes
 
 Service `FFE5`, notify `FFE4`, write `FFE9`. The streaming frame is 20 bytes:
