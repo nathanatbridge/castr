@@ -1,8 +1,8 @@
 # CastR
 
 Motion capture for casting analysis, built around a WitMotion **WT901BLE** IMU.
-Replaces the WitMotion app and exports CSV in the column format `cast_analysis.py`
-expects.
+Replaces the WitMotion app and exports CSV in WitMotion's own column format, so
+recordings drop into anything that already reads those exports.
 
 Two ways to collect:
 
@@ -116,7 +116,7 @@ swift run castr-selftest --emit-fixture fixtures/mine.hex 400     # make a fixtu
 `fixtures/synthetic-cast.hex` is a 400-frame simulated cast — at rest, one burst of
 acceleration and rotation, back to rest. Replay feeds it through the real parser in
 20-byte chunks, so it exercises the same incremental path as live BLE. Useful for
-pointing `cast_analysis.py` at a known-shaped file before any real data exists.
+developing analysis against a known-shaped file before any real data exists.
 
 Note that `castr-selftest` is a plain executable rather than a `swift test` target:
 XCTest ships inside Xcode, not the Command Line Tools, so `swift test` cannot run on a
@@ -140,7 +140,8 @@ ios/               iOS app sources, parked until Xcode is installed
 ```
 
 `CSVFormat` in `CastrCore/CSVWriter.swift` is the **single** definition of the output
-columns. If `cast_analysis.py` disagrees, that's the only place to change.
+columns. If downstream analysis needs a different layout, that's the only place to
+change.
 
 ## What the oven-test data established
 
@@ -249,16 +250,17 @@ listed and enabled.
 ## Known limitations
 
 - **Only the 0x55/0x61 frame** is decoded — no magnetometer or quaternion. Those need a
-  register read on `FFE9`. `cast_analysis.py` doesn't use them.
+  register read on `FFE9`. Nothing downstream consumes them yet.
 - **Timestamps are reconstructed**, not from the sensor's clock. Samples in a BLE burst
   are spread backwards from packet arrival at the nominal interval, which makes them
   monotonic and keeps the aggregate rate accurate — but the absolute time of any single
   sample is still only as good as the host clock. Fine for cast duration and
   segmentation; check drift before syncing against separate video.
-- **Column names match the real WitMotion export, but `cast_analysis.py` itself is
-  still unseen.** The nine channels we decode carry real values; the other ten columns
-  are present and blank. The header is UTF-8 and contains `°`, a common cause of
-  header-matching failures if a file gets read as latin-1.
+- **No analysis layer yet.** Column names match the real WitMotion export and the nine
+  channels we decode carry real values; the other ten columns are present and blank.
+  Turning recordings into per-stroke metrics is the next piece of work, not something
+  that exists. The header is UTF-8 and contains `°`, a common cause of header-matching
+  failures if a file gets read as latin-1.
 - **BLE range** is roughly 10 m, so Mac-tethered collection means the laptop comes
   outside with you. That's what the iOS app is for.
 

@@ -3,8 +3,8 @@ import Foundation
 /// The single definition of Castr's CSV format.
 ///
 /// Column names mirror the WitMotion app's own export so that existing analysis
-/// code reads files from either source unchanged. If `cast_analysis.py` disagrees,
-/// this enum is the only place that needs to change.
+/// code reads files from either source unchanged. If downstream analysis needs a
+/// different layout, this enum is the only place that needs to change.
 ///
 /// The header is UTF-8 and contains `°` — a classic source of header-matching
 /// failures in pandas when a file is read as latin-1.

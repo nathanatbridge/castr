@@ -47,7 +47,7 @@ public enum SyntheticSource {
 
     /// A stream resembling a cast: mostly at rest, with a burst of acceleration
     /// and rotation in the middle. Useful for exercising the full pipeline and
-    /// for producing a CSV that `cast_analysis.py` can be pointed at.
+    /// for producing a CSV of known shape to develop analysis against.
     public static func session(sampleCount: Int) -> [UInt8] {
         var out: [UInt8] = []
         out.reserveCapacity(sampleCount * FrameParser.frameLength)
