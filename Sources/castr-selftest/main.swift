@@ -33,6 +33,63 @@ if let flagIndex = args.firstIndex(of: "--emit-fixture") {
     }
 }
 
+// `--emit-csv <path> [strokes]` writes a small multi-stroke session. It is the
+// shared fixture for the web parity check: the browser port of the analysis is
+// asserted against Swift's own output on this exact file.
+if let flagIndex = args.firstIndex(of: "--emit-csv") {
+    guard flagIndex + 1 < args.count else {
+        print("usage: castr-selftest --emit-csv <path> [strokeCount]")
+        exit(2)
+    }
+    let path = args[flagIndex + 1]
+    let count = flagIndex + 2 < args.count ? (Int(args[flagIndex + 2]) ?? 5) : 5
+    let hz = 200.0
+    let base = Date(timeIntervalSince1970: 1_700_000_000)
+
+    var readings: [SensorReading] = []
+    var clock = 0.0
+    func rest(_ seconds: Double) {
+        for _ in 0..<Int(seconds * hz) {
+            readings.append(SensorReading(
+                timestamp: base.addingTimeInterval(clock),
+                accX: 0.01, accY: -0.02, accZ: 1.0,
+                gyroX: 0.3, gyroY: -0.2, gyroZ: 0.1,
+                angleX: 0, angleY: 0, angleZ: 0))
+            clock += 1 / hz
+        }
+    }
+    rest(0.6)
+    for k in 0..<count {
+        // Vary peak and duration so the spread statistics have something to chew on.
+        let peak = 380.0 + Double(k) * 55.0
+        let dur = 0.40 + Double(k % 3) * 0.06
+        let n = Int(dur * hz)
+        for i in 0..<n {
+            let u = Double(i) / Double(n)
+            let rate = peak * exp(-pow((u - 0.5) / 0.22, 2))
+            readings.append(SensorReading(
+                timestamp: base.addingTimeInterval(clock),
+                accX: 0.01 + rate / 900, accY: -0.02, accZ: 1.0 + rate / 1400,
+                gyroX: rate, gyroY: rate * 0.04, gyroZ: -rate * 0.02,
+                angleX: 0, angleY: 0, angleZ: 0))
+            clock += 1 / hz
+        }
+        rest(0.7)
+    }
+
+    do {
+        let url = URL(fileURLWithPath: path)
+        let w = try CSVWriter(url: url, deviceName: "WT901BLE-FIXTURE")
+        w.write(readings)
+        w.close()
+        print("Wrote \(readings.count) rows (\(count) strokes) to \(path)")
+        exit(0)
+    } catch {
+        print("error: \(error)")
+        exit(1)
+    }
+}
+
 print("castr-selftest — parser and CSV checks, no hardware required\n")
 
 runFrameParserTests()

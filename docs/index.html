@@ -1,0 +1,493 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CastR — session analyser</title>
+<meta name="description" content="Drop a WT901BLE recording and read per-stroke casting metrics. Runs entirely in your browser.">
+<style>
+  :root {
+    color-scheme: light;
+    --plane:#f9f9f7; --surface:#fcfcfb; --ink:#0b0b0b; --ink-2:#52514e;
+    --muted:#898781; --grid:#e1e0d9; --axis:#c3c2b7; --rule:rgba(11,11,11,.10);
+    --s1:#2a78d6; --s2:#eb6834; --s3:#1baf7a; --good:#0ca30c; --bad:#d03b3b;
+    --band:rgba(42,120,214,.09); --chip:#f0efec;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:where(:not([data-theme=light])) {
+      color-scheme: dark;
+      --plane:#0d0d0d; --surface:#1a1a19; --ink:#fff; --ink-2:#c3c2b7;
+      --muted:#898781; --grid:#2c2c2a; --axis:#383835; --rule:rgba(255,255,255,.10);
+      --s1:#3987e5; --s2:#d95926; --s3:#199e70;
+      --band:rgba(57,135,229,.13); --chip:#232321;
+    }
+  }
+  :root[data-theme=dark] {
+    color-scheme: dark;
+    --plane:#0d0d0d; --surface:#1a1a19; --ink:#fff; --ink-2:#c3c2b7;
+    --muted:#898781; --grid:#2c2c2a; --axis:#383835; --rule:rgba(255,255,255,.10);
+    --s1:#3987e5; --s2:#d95926; --s3:#199e70;
+    --band:rgba(57,135,229,.13); --chip:#232321;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--plane);color:var(--ink);
+    font-family:system-ui,-apple-system,"Segoe UI",sans-serif;font-size:15px;line-height:1.55;
+    -webkit-font-smoothing:antialiased}
+  .page{max-width:1120px;margin:0 auto;padding:36px 24px 72px;display:flex;flex-direction:column;gap:28px}
+  .mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+  .eyebrow{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;
+    letter-spacing:.14em;text-transform:uppercase;color:var(--muted)}
+  h1{margin:0;font-size:clamp(25px,4vw,34px);line-height:1.15;letter-spacing:-.02em;font-weight:620}
+  h2{margin:0;font-size:18px;font-weight:600;letter-spacing:-.01em}
+  .lede{margin:0;max-width:62ch;color:var(--ink-2);font-size:16px}
+  .top{display:flex;justify-content:space-between;align-items:flex-start;gap:20px;flex-wrap:wrap}
+  .masthead{display:flex;flex-direction:column;gap:9px}
+  button{font:inherit;cursor:pointer;border-radius:2px}
+  .ghost{background:var(--chip);color:var(--ink-2);border:1px solid transparent;padding:5px 12px;font-size:13px}
+  .ghost:hover{border-color:var(--axis)}
+  .primary{background:var(--ink);color:var(--plane);border:1px solid var(--ink);
+    padding:7px 18px;font-size:14px;font-weight:550}
+  .primary:hover{opacity:.85}
+
+  .drop{border:1.5px dashed var(--axis);border-radius:4px;background:var(--surface);
+    padding:34px 24px;text-align:center;display:flex;flex-direction:column;align-items:center;gap:12px;
+    transition:border-color .12s,background .12s}
+  .drop.over{border-color:var(--s1);background:var(--band)}
+  .drop p{margin:0;color:var(--ink-2);font-size:14.5px;max-width:56ch}
+  .drop .hint{font-size:12.5px;color:var(--muted)}
+  .row{display:flex;gap:10px;flex-wrap:wrap;justify-content:center}
+
+  .files{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+  .pill{display:inline-flex;align-items:center;gap:8px;background:var(--chip);
+    border-radius:2px;padding:4px 10px;font-size:12.5px;
+    font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--ink-2)}
+  .pill b{color:var(--ink);font-weight:600}
+  .pill button{background:none;border:0;color:var(--muted);padding:0 0 0 2px;font-size:15px;line-height:1}
+  .pill button:hover{color:var(--bad)}
+
+  .strip{display:grid;grid-template-columns:repeat(auto-fit,minmax(132px,1fr));
+    border-top:1px solid var(--rule);border-bottom:1px solid var(--rule)}
+  .cell{padding:12px 16px;border-left:1px solid var(--rule);display:flex;flex-direction:column;gap:2px}
+  .cell:first-child{border-left:0;padding-left:0}
+  .cell .k{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:10px;
+    letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
+  .cell .v{font-size:22px;font-weight:560;letter-spacing:-.015em;line-height:1.15}
+  .cell .v small{font-size:12px;font-weight:500;color:var(--ink-2);margin-left:2px}
+
+  .figure{background:var(--surface);border:1px solid var(--rule);border-radius:3px;padding:14px 14px 10px}
+  .figtitle{display:flex;justify-content:space-between;align-items:baseline;gap:14px;
+    flex-wrap:wrap;margin-bottom:8px}
+  .figtitle span{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:10.5px;
+    letter-spacing:.1em;text-transform:uppercase;color:var(--ink-2)}
+  .canvas-wrap{position:relative}
+  canvas{display:block;width:100%}
+
+  .tablewrap{overflow-x:auto;border:1px solid var(--rule);border-radius:3px;background:var(--surface)}
+  table{border-collapse:collapse;width:100%;min-width:660px}
+  caption{text-align:left;padding:11px 14px 0;color:var(--ink-2);font-size:13px}
+  th,td{padding:7px 13px;text-align:right;border-bottom:1px solid var(--grid);
+    font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;
+    font-variant-numeric:tabular-nums;white-space:nowrap}
+  th{color:var(--muted);font-weight:500;font-size:10.5px;letter-spacing:.07em;
+    text-transform:uppercase;border-bottom:1px solid var(--axis)}
+  th:first-child,td:first-child{text-align:left}
+  tbody tr:last-child td{border-bottom:0}
+  tbody tr:hover{background:var(--band)}
+  td.flag{color:var(--s2)}
+
+  .verdict{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap}
+  .verdict .big{font-size:30px;font-weight:600;letter-spacing:-.02em}
+  .verdict .word{font-size:15px;color:var(--ink-2)}
+  .note{margin:0;color:var(--ink-2);font-size:13.5px;max-width:76ch}
+  section{display:flex;flex-direction:column;gap:12px}
+  .hidden{display:none !important}
+  .err{border:1px solid var(--bad);border-radius:3px;padding:12px 14px;background:var(--surface);
+    color:var(--ink);font-size:14px}
+  .err b{color:var(--bad)}
+  footer{border-top:1px solid var(--rule);padding-top:18px;display:flex;flex-direction:column;gap:8px}
+  footer p{margin:0;font-size:13px;color:var(--ink-2);max-width:76ch}
+  a{color:var(--s1)}
+  code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.9em;
+    background:var(--band);padding:1px 4px;border-radius:2px}
+  :focus-visible{outline:2px solid var(--s1);outline-offset:2px}
+</style>
+</head>
+<body>
+<main class="page">
+
+  <div class="top">
+    <div class="masthead">
+      <div class="eyebrow">CastR</div>
+      <h1>Session analyser</h1>
+      <p class="lede">
+        Drop a WT901BLE recording to get per-stroke casting metrics. Everything runs in
+        this page — your file is never uploaded anywhere.
+      </p>
+    </div>
+    <button class="ghost" id="theme" aria-label="Switch between light and dark">Theme</button>
+  </div>
+
+  <div class="drop" id="drop">
+    <p><strong>Drop a CSV here</strong>, or choose a file. Add a second to compare two sessions.</p>
+    <div class="row">
+      <button class="primary" id="pick">Choose file</button>
+      <button class="ghost" id="example">Load example session</button>
+    </div>
+    <p class="hint">Recordings come from <code>castr-collect</code>. WitMotion app exports work too.</p>
+    <input type="file" id="file" accept=".csv,text/csv" multiple class="hidden">
+  </div>
+
+  <div id="error" class="err hidden"></div>
+  <div class="files hidden" id="files"></div>
+
+  <div id="results" class="hidden" style="display:flex;flex-direction:column;gap:28px">
+
+    <div class="strip" id="strip"></div>
+
+    <section>
+      <h2>Rotation over the session</h2>
+      <p class="note">
+        Strokes are detected on rotation rate — a cast is a rotation of the rod, and the
+        handle's acceleration mostly tracks gravity's direction as the rod tilts. Shaded
+        bands are the detected strokes.
+      </p>
+      <div class="figure">
+        <div class="figtitle">
+          <span>Rotation rate · °/s</span><span id="tracepeak"></span>
+        </div>
+        <div class="canvas-wrap">
+          <canvas id="trace" height="190" aria-label="Rotation rate over the session"></canvas>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>Strokes</h2>
+      <div class="tablewrap">
+        <table>
+          <caption>Stop deceleration is how hard the rod was stopped — what unloads it. Stop share is the portion of the stroke spent stopping; crisp stops are small.</caption>
+          <thead><tr>
+            <th scope="col">#</th><th scope="col">t s</th><th scope="col">dur s</th>
+            <th scope="col">arc °</th><th scope="col">peak °/s</th><th scope="col">peak at</th>
+            <th scope="col">stop decel °/s²</th><th scope="col">stop %</th>
+            <th scope="col">planar %</th><th scope="col">peak g</th>
+          </tr></thead>
+          <tbody id="strokes"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="consistency-section">
+      <h2>Consistency</h2>
+      <div class="verdict">
+        <span class="big mono" id="repcv"></span>
+        <span class="word" id="repword"></span>
+      </div>
+      <p class="note">
+        Mean spread across arc, duration, peak rate and stop deceleration — lower is more
+        alike. Planarity and peak acceleration are excluded: they track the mount and
+        geometry more than technique.
+      </p>
+      <div class="tablewrap">
+        <table>
+          <thead><tr>
+            <th scope="col">Metric</th><th scope="col">Mean</th><th scope="col">SD</th>
+            <th scope="col">CV</th><th scope="col">Min</th><th scope="col">Max</th>
+            <th scope="col">Outliers</th>
+          </tr></thead>
+          <tbody id="spreads"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="compare-section" class="hidden">
+      <h2>Comparison</h2>
+      <p class="note">
+        Each difference is weighed against the stroke-to-stroke variation inside each
+        session. A change smaller than your own noise is not evidence of a real change.
+      </p>
+      <div class="tablewrap">
+        <table>
+          <thead><tr>
+            <th scope="col">Metric</th><th scope="col" id="ch-a"></th><th scope="col" id="ch-b"></th>
+            <th scope="col">Change</th><th scope="col">Significance</th>
+          </tr></thead>
+          <tbody id="compare"></tbody>
+        </table>
+      </div>
+    </section>
+  </div>
+
+  <footer>
+    <p><strong>Where the numbers come from.</strong> Rotation is measured at the rod handle,
+      so these describe what the caster does, not where the tip goes — tip motion also
+      depends on rod flex, which a handle sensor cannot see.</p>
+    <p>The maths here is a port of the Swift analysis in
+      <a href="https://github.com/nathanatbridge/castr">the repo</a>, checked against it by
+      <code>tools/verify-web-parity.js</code> so the two can't quietly disagree.</p>
+  </footer>
+</main>
+
+<script src="analysis.js"></script>
+<script>
+(function () {
+  "use strict";
+  var A = window.CastrAnalysis;
+  var sessions = [];
+
+  var $ = function (id) { return document.getElementById(id); };
+  function f(v, d) { return (isFinite(v) ? v : 0).toFixed(d === undefined ? 0 : d); }
+  function css(n) { return getComputedStyle(document.documentElement).getPropertyValue(n).trim(); }
+
+  /* theme */
+  $("theme").addEventListener("click", function () {
+    var cur = document.documentElement.getAttribute("data-theme");
+    var dark = cur ? cur === "dark"
+      : window.matchMedia("(prefers-color-scheme: dark)").matches;
+    document.documentElement.setAttribute("data-theme", dark ? "light" : "dark");
+    if (sessions.length) drawTrace();
+  });
+
+  /* ---------- file intake ---------- */
+  var drop = $("drop"), input = $("file");
+  $("pick").addEventListener("click", function () { input.click(); });
+  input.addEventListener("change", function (e) { handleFiles(e.target.files); input.value = ""; });
+
+  ["dragenter", "dragover"].forEach(function (t) {
+    drop.addEventListener(t, function (e) { e.preventDefault(); drop.classList.add("over"); });
+  });
+  ["dragleave", "drop"].forEach(function (t) {
+    drop.addEventListener(t, function (e) { e.preventDefault(); drop.classList.remove("over"); });
+  });
+  drop.addEventListener("drop", function (e) {
+    if (e.dataTransfer && e.dataTransfer.files) handleFiles(e.dataTransfer.files);
+  });
+
+  $("example").addEventListener("click", function () {
+    fetch("fixtures/strokes.csv")
+      .then(function (r) {
+        if (!r.ok) throw new Error("could not load the example (HTTP " + r.status + ")");
+        return r.text();
+      })
+      .then(function (t) { addSession(t, "example session"); })
+      .catch(function (err) { showError(err.message); });
+  });
+
+  function handleFiles(list) {
+    Array.prototype.slice.call(list, 0, 2).forEach(function (file) {
+      var reader = new FileReader();
+      reader.onload = function () {
+        addSession(String(reader.result), file.name.replace(/\.csv$/i, ""));
+      };
+      reader.onerror = function () { showError("could not read " + file.name); };
+      reader.readAsText(file);
+    });
+  }
+
+  function showError(msg) {
+    var e = $("error");
+    e.innerHTML = "<b>Couldn't read that file.</b> " + msg;
+    e.classList.remove("hidden");
+  }
+
+  function addSession(text, name) {
+    var parsed;
+    try {
+      parsed = A.parseCSV(text, name);
+    } catch (err) {
+      showError(err.message + " — expected a recording with time, acceleration and " +
+                "rotation columns.");
+      return;
+    }
+    $("error").classList.add("hidden");
+    var strokes = A.analyze(parsed);
+    if (sessions.length >= 2) sessions.shift();
+    sessions.push({ session: parsed, strokes: strokes });
+    render();
+  }
+
+  function removeSession(i) { sessions.splice(i, 1); render(); }
+
+  /* ---------- render ---------- */
+  function render() {
+    var host = $("files");
+    if (!sessions.length) {
+      host.classList.add("hidden");
+      $("results").classList.add("hidden");
+      return;
+    }
+    host.classList.remove("hidden");
+    host.innerHTML = "";
+    sessions.forEach(function (s, i) {
+      var pill = document.createElement("span");
+      pill.className = "pill";
+      pill.innerHTML = "<b>" + escapeHtml(s.session.name) + "</b> " +
+        s.strokes.length + " stroke" + (s.strokes.length === 1 ? "" : "s");
+      var x = document.createElement("button");
+      x.type = "button"; x.textContent = "×";
+      x.setAttribute("aria-label", "Remove " + s.session.name);
+      x.addEventListener("click", function () { removeSession(i); });
+      pill.appendChild(x);
+      host.appendChild(pill);
+    });
+
+    $("results").classList.remove("hidden");
+    var primary = sessions[0];
+    renderStrip(primary);
+    renderStrokes(primary);
+    renderConsistency(primary);
+    drawTrace();
+
+    if (sessions.length === 2) renderCompare(sessions[0], sessions[1]);
+    else $("compare-section").classList.add("hidden");
+  }
+
+  function escapeHtml(s) {
+    return s.replace(/[&<>"]/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c];
+    });
+  }
+
+  function renderStrip(p) {
+    var peak = 0;
+    p.session.readings.forEach(function (r) { var v = A.rateOf(r); if (v > peak) peak = v; });
+    var cells = [
+      ["Strokes", String(p.strokes.length), ""],
+      ["Samples", p.session.readings.length.toLocaleString(), ""],
+      ["Duration", f(p.session.duration, 1), "s"],
+      ["Rate", f(p.session.sampleRateHz, 0), "Hz"],
+      ["Peak rotation", f(peak, 0), "°/s"]
+    ];
+    $("strip").innerHTML = cells.map(function (c) {
+      return '<div class="cell"><span class="k">' + c[0] + '</span><span class="v">' +
+        c[1] + (c[2] ? "<small>" + c[2] + "</small>" : "") + "</span></div>";
+    }).join("");
+    $("tracepeak").textContent = "peak " + f(peak, 0) + " °/s";
+  }
+
+  function renderStrokes(p) {
+    $("strokes").innerHTML = p.strokes.map(function (s) {
+      return "<tr><td>" + s.index + "</td><td>" + f(s.startTime, 2) + "</td><td>" +
+        f(s.duration, 3) + "</td><td>" + f(s.arcDeg, 1) + "</td><td>" +
+        f(s.peakRateDPS, 0) + "</td><td>" + f(s.peakRateAtPct, 0) + "%</td><td>" +
+        f(s.peakDecelDPS2, 0) + "</td><td>" + f(s.stopSharePct, 0) + "%</td><td>" +
+        f(s.planarityPct, 1) + "</td><td>" + f(s.peakAccG, 2) + "</td></tr>";
+    }).join("");
+  }
+
+  function renderConsistency(p) {
+    var sec = $("consistency-section");
+    if (p.strokes.length < 2) { sec.classList.add("hidden"); return; }
+    sec.classList.remove("hidden");
+
+    var sps = A.spreads(p.strokes);
+    $("spreads").innerHTML = sps.map(function (sp) {
+      var dec = sp.unit === "s" ? 3 : (sp.mean < 10 ? 2 : 0);
+      var out = sp.outliers.map(function (i) { return "#" + p.strokes[i].index; }).join(" ");
+      return "<tr><td>" + sp.name + "</td><td>" + f(sp.mean, dec) + "</td><td>" +
+        f(sp.sd, dec) + "</td><td>" + f(sp.cvPct, 1) + "%</td><td>" + f(sp.min, dec) +
+        "</td><td>" + f(sp.max, dec) + '</td><td class="flag">' + out + "</td></tr>";
+    }).join("");
+
+    var cv = A.repeatabilityCV(p.strokes);
+    if (cv === null) {
+      $("repcv").textContent = "—";
+      $("repword").textContent = "three or more strokes needed";
+    } else {
+      $("repcv").textContent = f(cv, 1) + "%";
+      $("repword").textContent = A.verdict(cv);
+    }
+  }
+
+  function renderCompare(a, b) {
+    if (!a.strokes.length || !b.strokes.length) {
+      $("compare-section").classList.add("hidden");
+      return;
+    }
+    $("compare-section").classList.remove("hidden");
+    $("ch-a").textContent = a.session.name;
+    $("ch-b").textContent = b.session.name;
+
+    var sa = A.spreads(a.strokes), sb = A.spreads(b.strokes);
+    $("compare").innerHTML = sa.map(function (x, i) {
+      var y = sb[i];
+      var dec = x.unit === "s" ? 3 : (x.mean < 10 ? 2 : 0);
+      var delta = y.mean - x.mean;
+      var pct = x.mean === 0 ? 0 : delta / Math.abs(x.mean) * 100;
+      var pooled = Math.sqrt((x.sd * x.sd + y.sd * y.sd) / 2);
+      var note = pooled === 0 ? "—"
+        : Math.abs(delta) > 2 * pooled ? "clear"
+        : Math.abs(delta) > pooled ? "possible" : "within noise";
+      return "<tr><td>" + x.name + "</td><td>" + f(x.mean, dec) + "</td><td>" +
+        f(y.mean, dec) + "</td><td>" + (delta >= 0 ? "+" : "") + f(pct, 1) +
+        "%</td><td>" + note + "</td></tr>";
+    }).join("");
+  }
+
+  /* ---------- trace ---------- */
+  function drawTrace() {
+    if (!sessions.length) return;
+    var p = sessions[0];
+    var cv = $("trace");
+    var dpr = window.devicePixelRatio || 1;
+    var W = cv.clientWidth, H = cv.clientHeight;
+    cv.width = W * dpr; cv.height = H * dpr;
+    var g = cv.getContext("2d");
+    g.setTransform(dpr, 0, 0, dpr, 0, 0);
+    g.clearRect(0, 0, W, H);
+
+    var r = p.session.readings;
+    if (r.length < 2) return;
+    var t0 = r[0].t, span = r[r.length - 1].t - t0;
+    var rate = r.map(A.rateOf);
+    var vmax = Math.max.apply(null, rate) * 1.08 || 1;
+    var pad = { l: 46, r: 10, t: 8, b: 20 };
+
+    function X(t) { return pad.l + ((t - t0) / span) * (W - pad.l - pad.r); }
+    function Y(v) { return pad.t + (1 - v / vmax) * (H - pad.t - pad.b); }
+
+    g.fillStyle = css("--band");
+    p.strokes.forEach(function (s) {
+      var a = r[s.span[0]].t, b = r[s.span[1] - 1].t;
+      g.fillRect(X(a), pad.t, Math.max(X(b) - X(a), 1.5), H - pad.t - pad.b);
+    });
+
+    g.strokeStyle = css("--grid"); g.lineWidth = 1;
+    g.fillStyle = css("--muted");
+    g.font = "10.5px ui-monospace, SFMono-Regular, Menlo, monospace";
+    g.textAlign = "right"; g.textBaseline = "middle";
+    var step = Math.pow(10, Math.floor(Math.log10(vmax / 3)));
+    if (vmax / step > 6) step *= 2;
+    for (var v = 0; v <= vmax; v += step) {
+      var y = Math.round(Y(v)) + .5;
+      g.beginPath(); g.moveTo(pad.l, y); g.lineTo(W - pad.r, y); g.stroke();
+      g.fillText(f(v, 0), pad.l - 7, y);
+    }
+
+    g.textAlign = "center"; g.textBaseline = "top";
+    var tstep = span > 60 ? 20 : span > 20 ? 10 : span > 8 ? 2 : 1;
+    for (var s2 = 0; s2 <= span; s2 += tstep) g.fillText(s2 + "s", X(t0 + s2), H - pad.b + 5);
+
+    g.strokeStyle = css("--s1"); g.lineWidth = 1.3; g.lineJoin = "round";
+    g.beginPath();
+    for (var i = 0; i < r.length; i++) {
+      var x = X(r[i].t), yy = Y(rate[i]);
+      if (i === 0) g.moveTo(x, yy); else g.lineTo(x, yy);
+    }
+    g.stroke();
+
+    g.fillStyle = css("--muted");
+    g.textAlign = "left"; g.textBaseline = "middle";
+    p.strokes.forEach(function (s) {
+      g.fillText(String(s.index), X(r[s.span[0]].t) + 2, pad.t + 7);
+    });
+  }
+
+  var raf;
+  window.addEventListener("resize", function () {
+    cancelAnimationFrame(raf); raf = requestAnimationFrame(drawTrace);
+  });
+})();
+</script>
+</body>
+</html>
