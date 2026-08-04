@@ -15,3 +15,7 @@ xcuserdata/
 
 # Recorded sessions / exports
 *.csv
+# ...but the parity fixture is source, not a recording: the web analyser is
+# asserted against Swift's output on this exact file, and the site serves it
+# as the example session.
+!docs/fixtures/*.csv
