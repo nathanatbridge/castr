@@ -51,6 +51,38 @@ The live status line reports sample count, measured rate, current acceleration, 
 format carries no checksum, so a rising reject count is the only signal that framing has
 gone wrong and the CSV can't be trusted.
 
+## Analysing a session
+
+```sh
+swift run castr-analyze cast2.csv                      # per-stroke report
+swift run castr-analyze a.csv --compare b.csv          # two sessions, side by side
+swift run castr-analyze cast2.csv --json               # for a front end
+```
+
+Strokes are segmented on **rotation rate**, not acceleration. A cast is fundamentally a
+rotation of the rod, and the handle's linear acceleration is dominated by gravity's
+changing direction as the rod tilts — an acceleration threshold fires on slow
+repositioning that isn't a stroke at all.
+
+What each stroke reports:
+
+| Metric | Meaning |
+|---|---|
+| Arc swept | how far the rod turned, start to finish |
+| Peak rate | fastest rotation reached, and where in the stroke it fell |
+| Stop decel | how hard the rod was stopped — what unloads it |
+| Stop share | portion of the stroke spent stopping; crisp stops are small |
+| Planarity | how much of the rotation stayed in one plane |
+
+Across strokes it reports spread, flags outliers, and reduces the whole session to one
+**repeatability** figure — the mean coefficient of variation over arc, duration, peak
+rate and stop deceleration. Planarity and peak acceleration are deliberately excluded:
+they track the mount and geometry more than technique.
+
+Comparisons weigh each difference against the stroke-to-stroke variation inside each
+session, so a change smaller than a caster's own noise is reported as `within noise`
+rather than as a finding.
+
 ## First time with the sensor — bring-up
 
 Run these in order. Each one gates the next, so a failure tells you exactly where the

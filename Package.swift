@@ -8,6 +8,7 @@ let package = Package(
         .library(name: "CastrCore", targets: ["CastrCore"]),
         .library(name: "CastrBLE", targets: ["CastrBLE"]),
         .executable(name: "castr-collect", targets: ["castr-collect"]),
+        .executable(name: "castr-analyze", targets: ["castr-analyze"]),
         .executable(name: "castr-selftest", targets: ["castr-selftest"]),
     ],
     targets: [
@@ -35,6 +36,9 @@ let package = Package(
                 ])
             ]
         ),
+
+        // Offline analysis. No CoreBluetooth, so it builds anywhere Swift does.
+        .executableTarget(name: "castr-analyze", dependencies: ["CastrCore"]),
 
         // Not a .testTarget: XCTest ships inside Xcode, not the Command Line
         // Tools, so `swift test` cannot run on a CLT-only machine — which is

@@ -44,6 +44,8 @@ print("")
 runSaturationTests()
 print("")
 runGlitchFilterTests()
+print("")
+runStrokeAnalysisTests()
 
 print("")
 if Check.failed == 0 {
