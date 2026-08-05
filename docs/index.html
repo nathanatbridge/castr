@@ -280,8 +280,9 @@
         way is up but leaves the heading free, so nothing in a handle-mounted IMU says which
         end of the swing is in front of you. The view assumes the first travelling stroke of
         a burst is a pickup and therefore goes back. When that is wrong — a burst that opens
-        on a forward cast, say — <em>Flip forward</em> corrects it. Nothing else in the
-        report depends on the choice.
+        on a forward cast, say — <em>Flip forward</em> corrects it. It affects this view
+        only: the side elevation reads left-to-right for legibility and claims no direction,
+        and no measurement anywhere in the report depends on the choice.
       </p>
       <p class="note">
         Colour is which way each stroke turned, measured about the burst's own rotation
@@ -703,17 +704,28 @@
     }
     span = Math.max(span, 0.2) * 1.35;      // headroom, and never absurdly zoomed
 
-    // Side elevation: looking along the swing axis. Forward to the right,
-    // up is up.
-    drawSwingView($("c-side"), b, 0, 2, span, true, false);
-    // From above: the casting axis runs up the page so a forward cast reads as
-    // forward, with the sideways wander left and right of it. Rotating it this
-    // way round is the difference between a line across the frame and a picture
-    // of where the rod went relative to the caster.
-    drawSwingView($("c-top"), b, 1, 0, span, true, true);
+    // The two views answer different questions, so they are oriented
+    // independently rather than sharing one convention.
+    //
+    // Side elevation shows the shape of the arc. It reads left-to-right, which
+    // is a readability choice and makes no claim about direction — so it is
+    // tied neither to the forward anchor nor to the flip, and stays put when
+    // either changes.
+    var sideSign = b.pts[b.pts.length - 1][0] < b.pts[0][0] ? -1 : 1;
+    drawSwingView($("c-side"), b, 0, 2, span, { hSign: sideSign, vSign: 1 });
+
+    // From above shows direction. The casting axis runs up the page so a
+    // forward cast reads as forward, with sideways wander either side of it —
+    // the difference between a line across the frame and a picture of where the
+    // rod went relative to the caster. Looking down the vertical reverses the
+    // sideways axis, and flipping forward is a half turn about the vertical,
+    // which reverses both.
+    var fwd = swing.flip ? -1 : 1;
+    drawSwingView($("c-top"), b, 1, 0, span,
+                  { hSign: -fwd, vSign: fwd, forward: true });
   }
 
-  function drawSwingView(cv, b, hAxis, vAxis, span, flipV, mirrorH) {
+  function drawSwingView(cv, b, hAxis, vAxis, span, o) {
     var dpr = window.devicePixelRatio || 1;
     var W = cv.clientWidth, H = cv.clientHeight;
     cv.width = W * dpr; cv.height = H * dpr;
@@ -723,14 +735,8 @@
     if (!b.pts.length) return;
 
     var pts = b.pts, i;
-    // Seen from above we are looking down the vertical, so with forward up the
-    // page the sideways axis runs the other way — without this the overhead
-    // view would be a mirror image of what the caster did.
-    var hSign = mirrorH ? -1 : 1;
-    var fwd = swing.flip ? -1 : 1;              // 0 is the swing axis in both views
-    if (hAxis === 0) hSign *= fwd;
+    var hSign = o.hSign, vSign = o.vSign;
     function hv(p) { return p[hAxis]*hSign; }
-    var vSign = vAxis === 0 ? fwd : 1;
 
     var hLo = Infinity, hHi = -Infinity, vLo = Infinity, vHi = -Infinity;
     for (i = 0; i < pts.length; i++) {
@@ -743,14 +749,13 @@
     hLo = Math.min(hLo, 0); hHi = Math.max(hHi, 0);
     vLo = Math.min(vLo, 0); vHi = Math.max(vHi, 0);
 
+    // Both views put positive up the screen — height in the side elevation,
+    // forward seen from above.
     var scale = Math.min(W, H) / span;
     var cx = W/2 - (hLo + hHi)/2 * scale;
-    var cy = H/2 + (vLo + vHi)/2 * scale * (flipV ? 1 : -1);
+    var cy = H/2 + (vLo + vHi)/2 * scale;
     function X(p) { return cx + hv(p)*scale; }
-    function Y(p) {
-      var v = p[vAxis]*vSign;
-      return flipV ? cy - v*scale : cy + v*scale;
-    }
+    function Y(p) { return cy - p[vAxis]*vSign*scale; }
 
     // 10 cm grid
     var step = 0.10*scale;
@@ -795,22 +800,19 @@
     g.fillStyle = css("--s3");
     g.beginPath(); g.arc(X(p), Y(p), 4.5, 0, 2*Math.PI); g.fill();
 
-    // scale key, and which way forward is — the whole point of the orientation
     g.fillStyle = css("--muted");
     g.font = '10px ui-monospace, SFMono-Regular, Menlo, monospace';
     g.fillText("10 cm grid", 6, H - 6);
 
-    g.fillStyle = css("--ink-2");
-    g.font = '11px ui-monospace, SFMono-Regular, Menlo, monospace';
-    if (mirrorH) {
+    // Only the overhead view claims a direction, so only it labels one.
+    if (o.forward) {
+      g.fillStyle = css("--ink-2");
+      g.font = '11px ui-monospace, SFMono-Regular, Menlo, monospace';
       g.textAlign = "center";
       g.fillText("forward ↑", W/2, 14);
       g.fillText("↓ back", W/2, H - 6);
-    } else {
-      g.textAlign = "right";
-      g.fillText("forward →", W - 6, 14);
+      g.textAlign = "left";
     }
-    g.textAlign = "left";
   }
 
   function stopSwing() {
