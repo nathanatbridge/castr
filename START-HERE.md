@@ -58,7 +58,7 @@ Sources/CastrCore/TagMatching.swift      tap → stroke matching, label grouping
 Sources/castr-collect/KeyTagger.swift    single-keypress reader, leaves Ctrl-C working
 docs/analysis.js                         JS port of the analysis — relevant if moving
                                          toward a real website/app
-docs/reconstruct.js                      swing path: side elevation + plan view, from
+docs/reconstruct.js                      swing path: side elevation + overhead view, from
                                          orientation times a fitted lever arm
 tools/verify-web-parity.js               keeps the Swift and JS analyses in agreement
 tools/verify-reconstruction.js           swing path vs the fixture's known arm and bias

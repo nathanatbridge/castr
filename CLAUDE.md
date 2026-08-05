@@ -48,7 +48,7 @@ Sources/
 ios/               iOS app sources, parked until Xcode is installed.
 docs/              GitHub Pages browser analyser — live, analysis only, no BLE.
   analysis.js        JS port of StrokeAnalysis; kept in step by verify-web-parity
-  reconstruct.js     swing path — side elevation and plan view. JS only: it has
+  reconstruct.js     swing path — side elevation and overhead view. JS only: it has
                      no Swift counterpart, so it is checked against ground truth
                      rather than against parity.
 tools/             reconstruct.py, verify-web-parity.js, verify-reconstruction.js

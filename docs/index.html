@@ -232,6 +232,8 @@
         <span class="ctl-k">Burst</span>
         <div class="chips" id="swing-bursts" role="group" aria-label="Select a burst"></div>
         <button class="ghost" id="swing-play" aria-label="Play or pause">Play</button>
+        <button class="ghost" id="swing-flip"
+                aria-label="Swap which direction counts as forward">Flip forward</button>
         <div class="scrub">
           <input type="range" id="swing-scrub" min="0" max="100" value="0" step="1"
                  aria-label="Time within the burst">
@@ -251,10 +253,10 @@
         </div>
         <div class="view">
           <div class="viewhead">
-            <span class="t">Plan view</span>
-            <span class="s">looking down from above</span>
+            <span class="t">From above</span>
+            <span class="s">forward is up the page</span>
           </div>
-          <canvas id="c-top" height="320" aria-label="Top-down view of the swing path"></canvas>
+          <canvas id="c-top" height="320" aria-label="The swing path seen from directly above"></canvas>
         </div>
       </div>
 
@@ -267,9 +269,19 @@
       </div>
 
       <p class="note">
-        Both views share one scale, so the plan view reading as a near-straight line is the
-        finding rather than a rendering choice — the swing barely leaves its plane. Grid
-        squares are 10&nbsp;cm.
+        Both views share one scale, so the overhead view reading as a near-straight line is
+        the finding rather than a rendering choice — the swing barely leaves its plane. Grid
+        squares are 10&nbsp;cm. Seen from above the casting axis runs up the page, so a
+        forward cast goes up and a back cast goes down, and sideways wander shows as width.
+      </p>
+
+      <p class="note">
+        <strong>Which way is forward is assumed, not measured.</strong> Gravity fixes which
+        way is up but leaves the heading free, so nothing in a handle-mounted IMU says which
+        end of the swing is in front of you. The view assumes the first travelling stroke of
+        a burst is a pickup and therefore goes back. When that is wrong — a burst that opens
+        on a forward cast, say — <em>Flip forward</em> corrects it. Nothing else in the
+        report depends on the choice.
       </p>
       <p class="note">
         Colour is which way each stroke turned, measured about the burst's own rotation
@@ -543,7 +555,9 @@
   }
 
   /* ---------- swing path ---------- */
-  var swing = { rec: null, burst: null, pos: 0, timer: null, session: null };
+  // `flip` swaps which end of the swing axis counts as forward. The data can't
+  // say — see the note in reconstruct.js — so the caster gets to correct it.
+  var swing = { rec: null, burst: null, pos: 0, timer: null, session: null, flip: false };
 
   function renderSwing(p) {
     var sec = $("swing-section");
@@ -672,7 +686,7 @@
     });
   }
 
-  /* Both views are drawn at one scale so the plan view being flat means the
+  /* Both views are drawn at one scale so the overhead view being flat means the
      swing is planar, rather than meaning the axes were stretched. */
   function drawSwing() {
     var b = swing.burst;
@@ -689,11 +703,17 @@
     }
     span = Math.max(span, 0.2) * 1.35;      // headroom, and never absurdly zoomed
 
-    drawSwingView($("c-side"), b, 0, 2, span, true);
-    drawSwingView($("c-top"),  b, 0, 1, span, false);
+    // Side elevation: looking along the swing axis. Forward to the right,
+    // up is up.
+    drawSwingView($("c-side"), b, 0, 2, span, true, false);
+    // From above: the casting axis runs up the page so a forward cast reads as
+    // forward, with the sideways wander left and right of it. Rotating it this
+    // way round is the difference between a line across the frame and a picture
+    // of where the rod went relative to the caster.
+    drawSwingView($("c-top"), b, 1, 0, span, true, true);
   }
 
-  function drawSwingView(cv, b, hAxis, vAxis, span, flipV) {
+  function drawSwingView(cv, b, hAxis, vAxis, span, flipV, mirrorH) {
     var dpr = window.devicePixelRatio || 1;
     var W = cv.clientWidth, H = cv.clientHeight;
     cv.width = W * dpr; cv.height = H * dpr;
@@ -703,12 +723,21 @@
     if (!b.pts.length) return;
 
     var pts = b.pts, i;
+    // Seen from above we are looking down the vertical, so with forward up the
+    // page the sideways axis runs the other way — without this the overhead
+    // view would be a mirror image of what the caster did.
+    var hSign = mirrorH ? -1 : 1;
+    var fwd = swing.flip ? -1 : 1;              // 0 is the swing axis in both views
+    if (hAxis === 0) hSign *= fwd;
+    function hv(p) { return p[hAxis]*hSign; }
+    var vSign = vAxis === 0 ? fwd : 1;
+
     var hLo = Infinity, hHi = -Infinity, vLo = Infinity, vHi = -Infinity;
     for (i = 0; i < pts.length; i++) {
-      if (pts[i][hAxis] < hLo) hLo = pts[i][hAxis];
-      if (pts[i][hAxis] > hHi) hHi = pts[i][hAxis];
-      if (pts[i][vAxis] < vLo) vLo = pts[i][vAxis];
-      if (pts[i][vAxis] > vHi) vHi = pts[i][vAxis];
+      if (hv(pts[i]) < hLo) hLo = hv(pts[i]);
+      if (hv(pts[i]) > hHi) hHi = hv(pts[i]);
+      if (pts[i][vAxis]*vSign < vLo) vLo = pts[i][vAxis]*vSign;
+      if (pts[i][vAxis]*vSign > vHi) vHi = pts[i][vAxis]*vSign;
     }
     // Include the pivot: the arm is only legible if you can see what it turns about.
     hLo = Math.min(hLo, 0); hHi = Math.max(hHi, 0);
@@ -717,8 +746,11 @@
     var scale = Math.min(W, H) / span;
     var cx = W/2 - (hLo + hHi)/2 * scale;
     var cy = H/2 + (vLo + vHi)/2 * scale * (flipV ? 1 : -1);
-    function X(p) { return cx + p[hAxis]*scale; }
-    function Y(p) { return flipV ? cy - p[vAxis]*scale : cy + p[vAxis]*scale; }
+    function X(p) { return cx + hv(p)*scale; }
+    function Y(p) {
+      var v = p[vAxis]*vSign;
+      return flipV ? cy - v*scale : cy + v*scale;
+    }
 
     // 10 cm grid
     var step = 0.10*scale;
@@ -763,10 +795,22 @@
     g.fillStyle = css("--s3");
     g.beginPath(); g.arc(X(p), Y(p), 4.5, 0, 2*Math.PI); g.fill();
 
-    // scale key
+    // scale key, and which way forward is — the whole point of the orientation
     g.fillStyle = css("--muted");
     g.font = '10px ui-monospace, SFMono-Regular, Menlo, monospace';
     g.fillText("10 cm grid", 6, H - 6);
+
+    g.fillStyle = css("--ink-2");
+    g.font = '11px ui-monospace, SFMono-Regular, Menlo, monospace';
+    if (mirrorH) {
+      g.textAlign = "center";
+      g.fillText("forward ↑", W/2, 14);
+      g.fillText("↓ back", W/2, H - 6);
+    } else {
+      g.textAlign = "right";
+      g.fillText("forward →", W - 6, 14);
+    }
+    g.textAlign = "left";
   }
 
   function stopSwing() {
@@ -779,6 +823,12 @@
     stopSwing();
     swing.pos = Number(this.value);
     updateSwing();
+  });
+
+  $("swing-flip").addEventListener("click", function () {
+    swing.flip = !swing.flip;
+    this.setAttribute("aria-pressed", String(swing.flip));
+    drawSwing();
   });
 
   $("swing-play").addEventListener("click", function () {

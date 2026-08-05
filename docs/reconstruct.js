@@ -287,7 +287,7 @@
 
     // Gravity fixes which way is up but leaves the heading free. Rotate about
     // the vertical so the swing's dominant horizontal direction becomes +X:
-    // the side view (XZ) then carries the arc and the plan view (XY) shows
+    // the side view (XZ) then carries the arc and the overhead view (XY) shows
     // departure from the plane, rather than both being arbitrary slices.
     var mx = 0, my = 0;
     for (k = 0; k < n; k++) { mx += raw[k][0]; my += raw[k][1]; }
@@ -304,7 +304,34 @@
     for (k = 0; k < n; k++) {
       pts.push([raw[k][0]*ct - raw[k][1]*st, raw[k][0]*st + raw[k][1]*ct, raw[k][2]]);
     }
-    if (pts[pts.length - 1][0] < pts[0][0]) {     // sweep left-to-right, for reading
+
+    // Which end of that axis is "forward" is not in the data. Gravity fixes
+    // which way is up but leaves the heading free, so the swing axis comes out
+    // of the principal-axis fit without a sign — this is the sign anchor
+    // PLAN.md Stage 2 is still open on.
+    //
+    // The convention used here is the one that plan proposes: the pickup goes
+    // back, so the first real stroke of a burst sweeps away from forward. It is
+    // an assumption, not a measurement, and the view offers a flip for when it
+    // is wrong. Strokes that barely move along the axis can't say anything
+    // about direction, so the first one that actually travels is used.
+    var extentRaw = 0, xlo = Infinity, xhi = -Infinity;
+    for (k = 0; k < n; k++) {
+      if (pts[k][0] < xlo) xlo = pts[k][0];
+      if (pts[k][0] > xhi) xhi = pts[k][0];
+    }
+    extentRaw = xhi - xlo;
+
+    var anchor = null;
+    for (var si = 0; si < strokeIdx.length; si++) {
+      var f0 = spans[strokeIdx[si]][0] - a, t0 = spans[strokeIdx[si]][1] - 1 - a;
+      var d0 = pts[t0][0] - pts[f0][0];
+      if (Math.abs(d0) >= 0.25*extentRaw) { anchor = d0; break; }
+    }
+    if (anchor === null) anchor = pts[n - 1][0] - pts[0][0];
+
+    // The first travelling stroke goes back, so it should sweep toward -X.
+    if (anchor > 0) {
       for (k = 0; k < n; k++) { pts[k][0] = -pts[k][0]; pts[k][1] = -pts[k][1]; }
     }
 

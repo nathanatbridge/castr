@@ -149,8 +149,12 @@ What each stroke reports:
 ### Swing path
 
 The browser analyser also reconstructs where the sensor went, as a **side elevation** and
-a **plan view** drawn at one scale — so the plan view reading as a near-straight line
-means the swing is planar, rather than meaning the axes were stretched.
+a view **from above**, drawn at one scale — so the overhead view reading as a near-straight
+line means the swing is planar, rather than meaning the axes were stretched. Seen from
+above the casting axis runs up the page, so a forward cast goes up and a back cast goes
+down. Which end is forward is an assumption, not a measurement: gravity fixes which way is
+up but leaves the heading free, so the view assumes a burst opens on a pickup going back
+and offers a flip for when that is wrong.
 
 Position is not double-integrated from acceleration; that drifts without bound and would
 be fiction within a second. The sensor is treated as a point on a rigid arm turning about
