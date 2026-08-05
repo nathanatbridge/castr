@@ -174,6 +174,20 @@ for idx, (a0, b0) in enumerate(bursts, 1):
             for j in range(3):
                 ATA[i][j] += sum(Mk[m][i]*Mk[m][j] for m in range(3))
             ATb[i] += sum(Mk[m][i]*dyn[k][m] for m in range(3))
+    # Only the part of the arm perpendicular to the rotation axis is
+    # observable: w x (w x r) and alpha x r both annihilate the component along
+    # w, so a swing that holds one axis leaves it with no trace in the
+    # acceleration at all. Without a ridge term the solve fills it with whatever
+    # fits the noise -- on the synthetic fixture that returned 59.9 cm for an arm
+    # whose observable part is 27.8 cm, while still fitting to a residual of
+    # 0.009. The ridge takes the minimum-norm solution instead, which drops the
+    # unobservable component rather than inventing one. What comes back is the
+    # swing radius: the part that actually sets the path.
+    RIDGE = 1e-4
+    lam = RIDGE * sum(ATA[i][i] for i in range(3)) / 3
+    for i in range(3):
+        ATA[i][i] += lam
+
     r_body = solve3(ATA, ATb) if used >= 25 else None
 
     if r_body is None:

@@ -13,6 +13,7 @@ currently stands.
 swift build
 swift run castr-selftest              # 290 checks, no hardware needed
 node tools/verify-web-parity.js       # browser analysis must match Swift
+node tools/verify-reconstruction.js   # swing path must recover the fixture's arm
 ```
 
 **There is no `swift test`.** XCTest ships inside Xcode, and this machine has Command
@@ -46,7 +47,11 @@ Sources/
   castr-selftest/  Test runner and fixture generator.
 ios/               iOS app sources, parked until Xcode is installed.
 docs/              GitHub Pages browser analyser — live, analysis only, no BLE.
-tools/             reconstruct.py, verify-web-parity.js
+  analysis.js        JS port of StrokeAnalysis; kept in step by verify-web-parity
+  reconstruct.js     swing path — side elevation and plan view. JS only: it has
+                     no Swift counterpart, so it is checked against ground truth
+                     rather than against parity.
+tools/             reconstruct.py, verify-web-parity.js, verify-reconstruction.js
 ```
 
 ## Hard constraints
@@ -64,6 +69,11 @@ tools/             reconstruct.py, verify-web-parity.js
 - **The frame format has no checksum.** A rising rejected-frame count is the only
   signal that framing broke. Always surface it.
 - **The browser analyser ignores tag sidecars.** Label grouping is `castr-analyze` only.
+- **The swing path is a reconstruction, and it refuses to guess.** Position comes from
+  orientation times a lever arm fitted to the acceleration — never from double-integrating
+  acceleration. A burst that isn't rotation about a fixed arm is reported as such and not
+  drawn. Only the part of the arm perpendicular to the rotation axis is observable, so the
+  fit is ridge-regularised to drop the rest rather than invent it.
 
 ## Conventions
 

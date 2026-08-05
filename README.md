@@ -146,6 +146,24 @@ What each stroke reports:
 | Stop share | portion of the stroke spent stopping; crisp stops are small |
 | Planarity | how much of the rotation stayed in one plane |
 
+### Swing path
+
+The browser analyser also reconstructs where the sensor went, as a **side elevation** and
+a **plan view** drawn at one scale — so the plan view reading as a near-straight line
+means the swing is planar, rather than meaning the axes were stretched.
+
+Position is not double-integrated from acceleration; that drifts without bound and would
+be fiction within a second. The sensor is treated as a point on a rigid arm turning about
+a pivot, so position follows from orientation — integrated from the gyro, which is well
+behaved — times a lever arm fitted to the measured acceleration. Strokes are grouped into
+bursts and drawn as one continuous path, coloured by which way each stroke turned.
+
+Two things it deliberately won't do. A burst whose acceleration no rigid arm explains is
+reported and **not drawn**, rather than rendered as though the path meant something. And
+only the component of the arm perpendicular to the rotation axis is observable at all —
+`ω×(ω×r)` and `α×r` both annihilate the rest — so the fit is regularised to return the
+swing radius rather than invent the unobservable part.
+
 Across strokes it reports spread, flags outliers, and reduces the whole session to one
 **repeatability** figure — the mean coefficient of variation over arc, duration, peak
 rate and stop deceleration. Planarity and peak acceleration are deliberately excluded:

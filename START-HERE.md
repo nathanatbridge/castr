@@ -58,8 +58,11 @@ Sources/CastrCore/TagMatching.swift      tap → stroke matching, label grouping
 Sources/castr-collect/KeyTagger.swift    single-keypress reader, leaves Ctrl-C working
 docs/analysis.js                         JS port of the analysis — relevant if moving
                                          toward a real website/app
+docs/reconstruct.js                      swing path: side elevation + plan view, from
+                                         orientation times a fitted lever arm
 tools/verify-web-parity.js               keeps the Swift and JS analyses in agreement
-tools/reconstruct.py                     fits the effective arm from sensor to pivot
+tools/verify-reconstruction.js           swing path vs the fixture's known arm and bias
+tools/reconstruct.py                     the same fit as a standalone CLI tool
 ```
 
 ---
@@ -71,6 +74,7 @@ cd /Users/nathandorathy/Desktop/Castr
 swift build
 swift run castr-selftest              # 290 checks, no hardware needed
 node tools/verify-web-parity.js
+node tools/verify-reconstruction.js
 swiftc -parse ios/ContentView.swift   # the only check available for iOS
 ```
 

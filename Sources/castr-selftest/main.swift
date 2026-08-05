@@ -46,15 +46,19 @@ if let flagIndex = args.firstIndex(of: "--emit-csv") {
     let hz = 200.0
     let base = Date(timeIntervalSince1970: 1_700_000_000)
 
-    var readings: [SensorReading] = []
+    // The rotation schedule comes first; acceleration is then derived from it,
+    // rather than invented. An earlier version of this fixture wrote a made-up
+    // acceleration (`0.01 + rate/900`) that no rotating body could produce, and
+    // fitting a lever arm to it returned 125 m. Data that can't happen is worse
+    // than no data — the same reason the ten unpopulated CSV columns are left
+    // blank instead of filled in.
+    var omega: [(t: Double, w: [Double])] = []
     var clock = 0.0
     func rest(_ seconds: Double) {
         for _ in 0..<Int(seconds * hz) {
-            readings.append(SensorReading(
-                timestamp: base.addingTimeInterval(clock),
-                accX: 0.01, accY: -0.02, accZ: 1.0,
-                gyroX: 0.3, gyroY: -0.2, gyroZ: 0.1,
-                angleX: 0, angleY: 0, angleZ: 0))
+            // A small constant offset, i.e. gyro bias: the reconstruction is
+            // expected to measure it and take it out.
+            omega.append((clock, [0.3, -0.2, 0.1]))
             clock += 1 / hz
         }
     }
@@ -63,11 +67,7 @@ if let flagIndex = args.firstIndex(of: "--emit-csv") {
         for i in 0..<n {
             let u = Double(i) / Double(n)
             let rate = peak * exp(-pow((u - 0.5) / 0.22, 2))
-            readings.append(SensorReading(
-                timestamp: base.addingTimeInterval(clock),
-                accX: 0.01 + abs(rate) / 900, accY: -0.02, accZ: 1.0 + abs(rate) / 1400,
-                gyroX: rate, gyroY: rate * 0.04, gyroZ: -rate * 0.02,
-                angleX: 0, angleY: 0, angleZ: 0))
+            omega.append((clock, [rate, rate * 0.04, -rate * 0.02]))
             clock += 1 / hz
         }
     }
@@ -84,6 +84,72 @@ if let flagIndex = args.firstIndex(of: "--emit-csv") {
     bell(peak: 430, dur: 0.40)
     bell(peak: -430, dur: 0.40)
     rest(0.7)
+
+    // --- derive acceleration from rotation about a rigid arm ---
+    //
+    // The sensor sits at a fixed offset from a stationary pivot, so what the
+    // accelerometer reads is gravity plus the centripetal and tangential terms
+    // of turning: a = g_body + (w x (w x r) + alpha x r) / G. Ground truth for
+    // tools/verify-reconstruction.js, which has to recover ARM_M from the CSV.
+    let armBody = [0.08, -0.10, -0.26]        // 29.0 cm from the pivot
+    let gravity = 9.80665
+    let deg = Double.pi / 180
+
+    func qmul(_ a: [Double], _ b: [Double]) -> [Double] {
+        [a[0]*b[0] - a[1]*b[1] - a[2]*b[2] - a[3]*b[3],
+         a[0]*b[1] + a[1]*b[0] + a[2]*b[3] - a[3]*b[2],
+         a[0]*b[2] - a[1]*b[3] + a[2]*b[0] + a[3]*b[1],
+         a[0]*b[3] + a[1]*b[2] - a[2]*b[1] + a[3]*b[0]]
+    }
+    func qnorm(_ q: [Double]) -> [Double] {
+        let n = (q[0]*q[0] + q[1]*q[1] + q[2]*q[2] + q[3]*q[3]).squareRoot()
+        return q.map { $0 / n }
+    }
+    /// Rotate `v` by the conjugate of `q` — world into body.
+    func qrotInv(_ q: [Double], _ v: [Double]) -> [Double] {
+        let w = q[0], x = -q[1], y = -q[2], z = -q[3]
+        let tx = 2*(y*v[2] - z*v[1]), ty = 2*(z*v[0] - x*v[2]), tz = 2*(x*v[1] - y*v[0])
+        return [v[0] + w*tx + (y*tz - z*ty),
+                v[1] + w*ty + (z*tx - x*tz),
+                v[2] + w*tz + (x*ty - y*tx)]
+    }
+    func cross(_ a: [Double], _ b: [Double]) -> [Double] {
+        [a[1]*b[2] - a[2]*b[1], a[2]*b[0] - a[0]*b[2], a[0]*b[1] - a[1]*b[0]]
+    }
+
+    let n = omega.count
+    // Angular acceleration by central difference, matching how the analysis
+    // estimates it — a one-sample difference is mostly quantisation.
+    func alpha(_ i: Int) -> [Double] {
+        let a = Swift.max(0, i - 2), b = Swift.min(n - 1, i + 2)
+        let dt = omega[b].t - omega[a].t
+        guard dt > 0 else { return [0, 0, 0] }
+        return (0..<3).map { (omega[b].w[$0] - omega[a].w[$0]) * deg / dt }
+    }
+
+    var readings: [SensorReading] = []
+    var q = [1.0, 0.0, 0.0, 0.0]              // starts level, so at rest acc reads +Z
+    for i in 0..<n {
+        let w = omega[i].w.map { $0 * deg }   // rad/s
+        let gBody = qrotInv(q, [0, 0, 1])
+        let dyn = zip(cross(w, cross(w, armBody)), cross(alpha(i), armBody)).map { $0 + $1 }
+        readings.append(SensorReading(
+            timestamp: base.addingTimeInterval(omega[i].t),
+            accX: gBody[0] + dyn[0] / gravity,
+            accY: gBody[1] + dyn[1] / gravity,
+            accZ: gBody[2] + dyn[2] / gravity,
+            gyroX: omega[i].w[0], gyroY: omega[i].w[1], gyroZ: omega[i].w[2],
+            angleX: 0, angleY: 0, angleZ: 0))
+        if i < n - 1 {
+            let dt = omega[i + 1].t - omega[i].t
+            let mag = (w[0]*w[0] + w[1]*w[1] + w[2]*w[2]).squareRoot()
+            let ang = mag * dt
+            if ang > 1e-12 {
+                let s = sin(ang / 2) / mag
+                q = qnorm(qmul(q, [cos(ang / 2), w[0]*s, w[1]*s, w[2]*s]))
+            }
+        }
+    }
 
     do {
         let url = URL(fileURLWithPath: path)

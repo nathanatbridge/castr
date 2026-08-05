@@ -110,6 +110,47 @@
   code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.9em;
     background:var(--band);padding:1px 4px;border-radius:2px}
   :focus-visible{outline:2px solid var(--s1);outline-offset:2px}
+
+  /* ---------- swing path ---------- */
+  .swingctl{display:flex;flex-wrap:wrap;align-items:center;gap:12px 16px;padding:11px 13px;
+    background:var(--surface);border:1px solid var(--rule);border-radius:3px}
+  .ctl-k{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:10.5px;
+    letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
+  .chips{display:flex;gap:6px;flex-wrap:wrap}
+  .chips button{font:inherit;font-size:12.5px;
+    font-family:ui-monospace,SFMono-Regular,Menlo,monospace;padding:4px 10px;border-radius:2px;
+    cursor:pointer;background:var(--chip);color:var(--ink-2);border:1px solid transparent}
+  .chips button:hover{border-color:var(--axis)}
+  .chips button[aria-pressed=true]{background:var(--s1);color:#fff;border-color:var(--s1)}
+  .chips button:disabled{opacity:.4;cursor:not-allowed}
+  .scrub{flex:1 1 220px;display:flex;align-items:center;gap:10px;min-width:180px}
+  .scrub input[type=range]{width:100%;accent-color:var(--s1)}
+  .clock{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px;
+    font-variant-numeric:tabular-nums;color:var(--ink-2);white-space:nowrap}
+  .views{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  @media (max-width:760px){.views{grid-template-columns:1fr}}
+  .view{background:var(--surface);border:1px solid var(--rule);border-radius:3px;
+    padding:12px 12px 8px;display:flex;flex-direction:column;gap:8px}
+  .viewhead{display:flex;justify-content:space-between;align-items:baseline;gap:12px}
+  .viewhead .t{font-size:14px;font-weight:600}
+  .viewhead .s{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:10.5px;
+    letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+  .view canvas{display:block;width:100%}
+  .readout{display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));
+    border-top:1px solid var(--rule);border-bottom:1px solid var(--rule)}
+  .rcell{padding:10px 15px;border-left:1px solid var(--rule);display:flex;
+    flex-direction:column;gap:2px}
+  .rcell:first-child{border-left:0;padding-left:0}
+  .rcell .k{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:10px;
+    letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
+  .rcell .v{font-size:20px;font-weight:560;letter-spacing:-.015em;line-height:1.15}
+  .rcell .v small{font-size:12px;font-weight:500;color:var(--ink-2);margin-left:2px}
+  .legend{display:flex;gap:15px;flex-wrap:wrap}
+  .legend span{display:inline-flex;align-items:center;gap:6px;
+    font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px;color:var(--ink-2)}
+  .legend i{width:14px;height:3px;border-radius:2px;flex:none}
+  .legend i.dot{width:9px;height:9px;border-radius:50%}
+  .warn{color:var(--s2)}
 </style>
 </head>
 <body>
@@ -177,6 +218,81 @@
       </div>
     </section>
 
+    <section id="swing-section">
+      <h2>Swing path</h2>
+      <p class="note">
+        Where the sensor actually went. Position is <em>not</em> double-integrated from
+        acceleration — that drifts without bound and would be fiction within a second.
+        The sensor is treated as a point on a rigid arm turning about a pivot, so position
+        follows from orientation, integrated from the gyro, times a lever arm that is
+        measured rather than assumed.
+      </p>
+
+      <div class="swingctl">
+        <span class="ctl-k">Burst</span>
+        <div class="chips" id="swing-bursts" role="group" aria-label="Select a burst"></div>
+        <button class="ghost" id="swing-play" aria-label="Play or pause">Play</button>
+        <div class="scrub">
+          <input type="range" id="swing-scrub" min="0" max="100" value="0" step="1"
+                 aria-label="Time within the burst">
+          <span class="clock" id="swing-clock">0.000 s</span>
+        </div>
+      </div>
+
+      <div class="readout" id="swing-readout"></div>
+
+      <div class="views">
+        <div class="view">
+          <div class="viewhead">
+            <span class="t">Side elevation</span>
+            <span class="s">looking along the swing axis</span>
+          </div>
+          <canvas id="c-side" height="320" aria-label="Side view of the swing path"></canvas>
+        </div>
+        <div class="view">
+          <div class="viewhead">
+            <span class="t">Plan view</span>
+            <span class="s">looking down from above</span>
+          </div>
+          <canvas id="c-top" height="320" aria-label="Top-down view of the swing path"></canvas>
+        </div>
+      </div>
+
+      <div class="legend">
+        <span><i style="background:var(--s1)"></i>Stroke one way</span>
+        <span><i style="background:var(--s2)"></i>Stroke the other way</span>
+        <span><i class="dot" style="background:var(--s3)"></i>Sensor</span>
+        <span><i class="dot" style="background:var(--ink-2)"></i>Pivot</span>
+        <span><i style="background:var(--axis)"></i>Arm</span>
+      </div>
+
+      <p class="note">
+        Both views share one scale, so the plan view reading as a near-straight line is the
+        finding rather than a rendering choice — the swing barely leaves its plane. Grid
+        squares are 10&nbsp;cm.
+      </p>
+      <p class="note">
+        Colour is which way each stroke turned, measured about the burst's own rotation
+        axis. In casting the colours should alternate, because a back cast and the forward
+        cast after it are one movement run in opposite directions — so two of the same
+        colour in a row means either a missed stroke or a movement that wasn't a cast, and
+        is worth looking at rather than explaining away.
+      </p>
+
+      <div class="tablewrap">
+        <table>
+          <caption>Residual is the share of dynamic acceleration the rigid-arm model fails to explain — lower is a better fit. A burst that never turned fast enough to identify the lever arm is listed but not drawn.</caption>
+          <thead><tr>
+            <th scope="col">Burst</th><th scope="col">t s</th><th scope="col">Strokes</th>
+            <th scope="col">Arm cm</th><th scope="col">Residual</th>
+            <th scope="col">Extent cm</th><th scope="col">Out of plane cm</th>
+            <th scope="col">Notes</th>
+          </tr></thead>
+          <tbody id="swing-bursts-table"></tbody>
+        </table>
+      </div>
+    </section>
+
     <section id="consistency-section">
       <h2>Consistency</h2>
       <div class="verdict">
@@ -229,6 +345,7 @@
 </main>
 
 <script src="analysis.js"></script>
+<script src="reconstruct.js"></script>
 <script>
 (function () {
   "use strict";
@@ -245,7 +362,7 @@
     var dark = cur ? cur === "dark"
       : window.matchMedia("(prefers-color-scheme: dark)").matches;
     document.documentElement.setAttribute("data-theme", dark ? "light" : "dark");
-    if (sessions.length) drawTrace();
+    if (sessions.length) { drawTrace(); drawSwing(); }
   });
 
   /* ---------- file intake ---------- */
@@ -335,6 +452,7 @@
     var primary = sessions[0];
     renderStrip(primary);
     renderStrokes(primary);
+    renderSwing(primary);
     renderConsistency(primary);
     drawTrace();
 
@@ -424,6 +542,260 @@
     }).join("");
   }
 
+  /* ---------- swing path ---------- */
+  var swing = { rec: null, burst: null, pos: 0, timer: null, session: null };
+
+  function renderSwing(p) {
+    var sec = $("swing-section");
+    stopSwing();
+    swing.session = p;
+    swing.rec = null;
+    swing.burst = null;
+
+    var spans = A.detectStrokes(p.session.readings);
+    if (!spans.length) { sec.classList.add("hidden"); return; }
+    sec.classList.remove("hidden");
+
+    swing.rec = window.CastrReconstruct.reconstruct(p.session.readings, spans);
+    var bursts = swing.rec.bursts;
+
+    var REASONS = {
+      "too slow": "never turned fast enough to identify an arm",
+      "singular": "arm not identifiable",
+      "implausible arm": "rejected — arm is not a physical length",
+      "model does not fit": "rejected — not rotation about a fixed arm"
+    };
+    $("swing-bursts-table").innerHTML = bursts.map(function (b) {
+      var notes = [], flag = false;
+      if (!b.ok) { notes.push(REASONS[b.reason] || b.reason); flag = true; }
+      else {
+        var q = window.CastrReconstruct.quality(b.residual);
+        notes.push(q + " fit");
+        if (q === "poor") flag = true;
+        if (!b.grounded) {
+          notes.push("no still window — orientation not anchored");
+          flag = true;
+        }
+      }
+      // A rejected burst still reports what it measured: the figures are the
+      // reason it was rejected, so hiding them would hide the evidence.
+      return "<tr><td>" + b.index + "</td><td>" + f(b.startTime, 1) + "</td><td>" +
+        b.strokes.length + "</td><td>" +
+        (b.armCm !== undefined ? f(b.armCm, 1) : "—") + "</td><td>" +
+        (b.residual !== undefined && b.residual !== null ? f(b.residual, 2) : "—") + "</td><td>" +
+        (b.ok ? f(b.extentCm, 0) : "—") + "</td><td>" +
+        (b.ok ? f(b.outOfPlaneCm, 0) : "—") + "</td><td" +
+        (flag ? ' class="flag"' : "") + ">" +
+        escapeHtml(notes.join("; ")) + "</td></tr>";
+    }).join("");
+
+    var host = $("swing-bursts");
+    host.innerHTML = "";
+    bursts.forEach(function (b) {
+      var btn = document.createElement("button");
+      btn.type = "button";
+      btn.textContent = String(b.index);
+      btn.disabled = !b.ok;
+      btn.title = b.ok ? b.strokes.length + " strokes at " + f(b.startTime, 1) + " s"
+                       : "not fitted: " + b.reason;
+      btn.addEventListener("click", function () { selectBurst(b); });
+      host.appendChild(btn);
+    });
+
+    var first = bursts.filter(function (b) { return b.ok; })[0];
+    if (first) selectBurst(first);
+    else {
+      swing.burst = null;
+      $("swing-readout").innerHTML =
+        '<div class="rcell"><span class="k">Swing path</span>' +
+        '<span class="v warn" style="font-size:15px">no path drawn</span></div>' +
+        '<div class="rcell"><span class="k">Why</span><span class="v" style="font-size:15px">' +
+        'no burst in this session is rotation about a fixed arm — see the table below' +
+        '</span></div>';
+      clearSwingCanvases();
+    }
+  }
+
+  function selectBurst(b) {
+    stopSwing();
+    swing.burst = b;
+    // Open on the end of the last stroke rather than the end of the padding,
+    // so the readout names a stroke instead of showing dashes.
+    swing.pos = b.segs.length ? b.segs[b.segs.length - 1].to : b.pts.length - 1;
+    Array.prototype.forEach.call($("swing-bursts").children, function (btn) {
+      btn.setAttribute("aria-pressed", String(Number(btn.textContent) === b.index));
+    });
+    var sc = $("swing-scrub");
+    sc.max = String(b.pts.length - 1);
+    sc.value = String(swing.pos);
+    updateSwing();
+  }
+
+  /* Which stroke, if any, the playhead is inside. */
+  function strokeAt(b, pos) {
+    for (var i = 0; i < b.segs.length; i++) {
+      if (pos >= b.segs[i].from && pos <= b.segs[i].to) return b.segs[i];
+    }
+    return null;
+  }
+
+  function updateSwing() {
+    var b = swing.burst;
+    if (!b) return;
+    $("swing-scrub").value = String(swing.pos);
+    $("swing-clock").textContent = f(b.t[swing.pos], 3) + " s";
+
+    var seg = strokeAt(b, swing.pos);
+    var strokes = swing.session.strokes;
+    var m = seg ? strokes[seg.stroke] : null;
+    var cells = [
+      ["Burst", b.index + "<small>/" + swing.rec.bursts.length + "</small>", ""],
+      ["Stroke", m ? "#" + m.index : "—", ""],
+      ["Direction", seg ? (seg.dir > 0 ? "→" : "←") : "—", ""],
+      ["Arc", m ? f(m.arcDeg, 0) : "—", m ? "°" : ""],
+      ["Arm", f(b.armCm, 1), "cm"],
+      ["Residual", b.residual === null ? "—" : f(b.residual, 2), ""],
+      ["Out of plane", f(b.outOfPlaneCm, 1), "cm"]
+    ];
+    $("swing-readout").innerHTML = cells.map(function (c) {
+      return '<div class="rcell"><span class="k">' + c[0] + '</span><span class="v">' +
+        c[1] + (c[2] ? "<small>" + c[2] + "</small>" : "") + "</span></div>";
+    }).join("");
+
+    drawSwing();
+  }
+
+  function clearSwingCanvases() {
+    ["c-side", "c-top"].forEach(function (id) {
+      var cv = $(id), g = cv.getContext("2d");
+      g.clearRect(0, 0, cv.width, cv.height);
+    });
+  }
+
+  /* Both views are drawn at one scale so the plan view being flat means the
+     swing is planar, rather than meaning the axes were stretched. */
+  function drawSwing() {
+    var b = swing.burst;
+    if (!b) return;
+
+    var span = 0, k, j;
+    for (j = 0; j < 3; j++) {
+      var lo = Infinity, hi = -Infinity;
+      for (k = 0; k < b.pts.length; k++) {
+        if (b.pts[k][j] < lo) lo = b.pts[k][j];
+        if (b.pts[k][j] > hi) hi = b.pts[k][j];
+      }
+      if (hi - lo > span) span = hi - lo;
+    }
+    span = Math.max(span, 0.2) * 1.35;      // headroom, and never absurdly zoomed
+
+    drawSwingView($("c-side"), b, 0, 2, span, true);
+    drawSwingView($("c-top"),  b, 0, 1, span, false);
+  }
+
+  function drawSwingView(cv, b, hAxis, vAxis, span, flipV) {
+    var dpr = window.devicePixelRatio || 1;
+    var W = cv.clientWidth, H = cv.clientHeight;
+    cv.width = W * dpr; cv.height = H * dpr;
+    var g = cv.getContext("2d");
+    g.setTransform(dpr, 0, 0, dpr, 0, 0);
+    g.clearRect(0, 0, W, H);
+    if (!b.pts.length) return;
+
+    var pts = b.pts, i;
+    var hLo = Infinity, hHi = -Infinity, vLo = Infinity, vHi = -Infinity;
+    for (i = 0; i < pts.length; i++) {
+      if (pts[i][hAxis] < hLo) hLo = pts[i][hAxis];
+      if (pts[i][hAxis] > hHi) hHi = pts[i][hAxis];
+      if (pts[i][vAxis] < vLo) vLo = pts[i][vAxis];
+      if (pts[i][vAxis] > vHi) vHi = pts[i][vAxis];
+    }
+    // Include the pivot: the arm is only legible if you can see what it turns about.
+    hLo = Math.min(hLo, 0); hHi = Math.max(hHi, 0);
+    vLo = Math.min(vLo, 0); vHi = Math.max(vHi, 0);
+
+    var scale = Math.min(W, H) / span;
+    var cx = W/2 - (hLo + hHi)/2 * scale;
+    var cy = H/2 + (vLo + vHi)/2 * scale * (flipV ? 1 : -1);
+    function X(p) { return cx + p[hAxis]*scale; }
+    function Y(p) { return flipV ? cy - p[vAxis]*scale : cy + p[vAxis]*scale; }
+
+    // 10 cm grid
+    var step = 0.10*scale;
+    if (step > 6) {
+      g.strokeStyle = css("--grid"); g.lineWidth = 1;
+      g.beginPath();
+      for (var gx = cx % step; gx < W; gx += step) { g.moveTo(gx + 0.5, 0); g.lineTo(gx + 0.5, H); }
+      for (var gy = cy % step; gy < H; gy += step) { g.moveTo(0, gy + 0.5); g.lineTo(W, gy + 0.5); }
+      g.stroke();
+    }
+
+    // full path, ghosted
+    g.strokeStyle = css("--axis"); g.lineWidth = 1; g.globalAlpha = 0.55;
+    g.beginPath();
+    for (i = 0; i < pts.length; i++) {
+      if (i) g.lineTo(X(pts[i]), Y(pts[i])); else g.moveTo(X(pts[i]), Y(pts[i]));
+    }
+    g.stroke();
+    g.globalAlpha = 1;
+
+    // strokes up to the playhead, coloured by direction
+    var c1 = css("--s1"), c2 = css("--s2");
+    g.lineWidth = 2.25; g.lineJoin = "round"; g.lineCap = "round";
+    b.segs.forEach(function (seg) {
+      if (seg.from > swing.pos) return;
+      var end = Math.min(seg.to, swing.pos);
+      g.strokeStyle = seg.dir > 0 ? c1 : c2;
+      g.beginPath();
+      for (var k = seg.from; k <= end; k++) {
+        if (k === seg.from) g.moveTo(X(pts[k]), Y(pts[k])); else g.lineTo(X(pts[k]), Y(pts[k]));
+      }
+      g.stroke();
+    });
+
+    // arm, pivot, sensor
+    var p = pts[swing.pos];
+    g.strokeStyle = css("--axis"); g.lineWidth = 1.5;
+    g.beginPath(); g.moveTo(X([0,0,0]), Y([0,0,0])); g.lineTo(X(p), Y(p)); g.stroke();
+
+    g.fillStyle = css("--ink-2");
+    g.beginPath(); g.arc(X([0,0,0]), Y([0,0,0]), 3.5, 0, 2*Math.PI); g.fill();
+    g.fillStyle = css("--s3");
+    g.beginPath(); g.arc(X(p), Y(p), 4.5, 0, 2*Math.PI); g.fill();
+
+    // scale key
+    g.fillStyle = css("--muted");
+    g.font = '10px ui-monospace, SFMono-Regular, Menlo, monospace';
+    g.fillText("10 cm grid", 6, H - 6);
+  }
+
+  function stopSwing() {
+    if (swing.timer) { clearInterval(swing.timer); swing.timer = null; }
+    var btn = $("swing-play");
+    if (btn) btn.textContent = "Play";
+  }
+
+  $("swing-scrub").addEventListener("input", function () {
+    stopSwing();
+    swing.pos = Number(this.value);
+    updateSwing();
+  });
+
+  $("swing-play").addEventListener("click", function () {
+    var b = swing.burst;
+    if (!b) return;
+    if (swing.timer) { stopSwing(); return; }
+    if (swing.pos >= b.pts.length - 1) swing.pos = 0;
+    this.textContent = "Pause";
+    // Real time, near enough: the recordings are ~200 Hz and stepping four
+    // samples per 20 ms frame plays a burst back at about life speed.
+    swing.timer = setInterval(function () {
+      swing.pos = Math.min(swing.pos + 4, b.pts.length - 1);
+      updateSwing();
+      if (swing.pos >= b.pts.length - 1) stopSwing();
+    }, 20);
+  });
+
   /* ---------- trace ---------- */
   function drawTrace() {
     if (!sessions.length) return;
@@ -485,7 +857,8 @@
 
   var raf;
   window.addEventListener("resize", function () {
-    cancelAnimationFrame(raf); raf = requestAnimationFrame(drawTrace);
+    cancelAnimationFrame(raf);
+    raf = requestAnimationFrame(function () { drawTrace(); drawSwing(); });
   });
 })();
 </script>
