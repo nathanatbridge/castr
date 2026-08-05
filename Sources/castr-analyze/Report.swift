@@ -13,8 +13,10 @@ enum Report {
     // MARK: - Text report
 
     static func text(session: CSVReader.Session, strokes: [StrokeMetrics],
-                     other: CSVReader.Session?, otherStrokes: [StrokeMetrics]) {
-        header(session, strokes)
+                     tags: TagMatcher.Result,
+                     other: CSVReader.Session?, otherStrokes: [StrokeMetrics],
+                     otherTags: TagMatcher.Result) {
+        header(session, strokes, tags)
 
         guard !strokes.isEmpty else {
             print("""
@@ -29,8 +31,10 @@ enum Report {
             return
         }
 
-        strokeTable(strokes)
+        strokeTable(strokes, tags)
         consistency(strokes)
+        byLabel(strokes, tags)
+        untaggedNote(strokes, tags)
 
         if let o = other, !otherStrokes.isEmpty {
             comparison(a: session, aStrokes: strokes, b: o, bStrokes: otherStrokes)
@@ -39,24 +43,41 @@ enum Report {
         }
     }
 
-    static func header(_ s: CSVReader.Session, _ strokes: [StrokeMetrics]) {
+    static func header(_ s: CSVReader.Session, _ strokes: [StrokeMetrics],
+                       _ tags: TagMatcher.Result) {
         print("")
         print(s.name)
         print(rule(76))
         print("  \(s.readings.count) samples over \(f(s.duration, 1)) s "
               + "at \(f(s.sampleRateHz, 0)) Hz    device \(s.deviceName)")
         print("  \(strokes.count) stroke\(strokes.count == 1 ? "" : "s") detected")
+        if !tags.matches.isEmpty {
+            print("  \(tags.matches.count) tagged — \(tags.summary)")
+            if let lag = tags.medianOffset {
+                // The tagger's own reaction time, measured rather than assumed.
+                // If this is far off the lag that was corrected out, the labels
+                // were placed against the wrong assumption — rerun with --lag.
+                print("  taps landed " + f(lag, 2) + " s after their stroke, typically")
+            }
+        }
     }
 
-    static func strokeTable(_ strokes: [StrokeMetrics]) {
+    static func strokeTable(_ strokes: [StrokeMetrics], _ tags: TagMatcher.Result) {
+        let labelled = !tags.matches.isEmpty
         print("")
         print("STROKES")
-        print("  " + pad("#", 3) + pad("t/s", 8) + pad("dur/s", 8) + pad("arc°", 8)
+        print("  " + pad("#", 3) + (labelled ? " " + pad("label", 10, right: false) : "")
+              + pad("t/s", 8) + pad("dur/s", 8) + pad("arc°", 8)
               + pad("peak°/s", 9) + pad("peak@", 7) + pad("decel°/s²", 11)
               + pad("stop%", 7) + pad("planar%", 9) + pad("|a|g", 7))
-        print("  " + rule(77))
+        print("  " + rule(labelled ? 88 : 77))
         for m in strokes {
-            print("  " + pad(String(m.index), 3)
+            // An untagged stroke inside a tagged session gets a dash, not a
+            // blank — a gap in the tagging should be visible, not invisible.
+            let label = labelled
+                ? " " + pad(tags.label(forStroke: m.index)?.short ?? "—", 10, right: false)
+                : ""
+            print("  " + pad(String(m.index), 3) + label
                   + pad(f(m.startTime, 2), 8)
                   + pad(f(m.duration, 3), 8)
                   + pad(f(m.arcDeg, 1), 8)
@@ -66,6 +87,71 @@ enum Report {
                   + pad(f(m.stopSharePct, 0) + "%", 7)
                   + pad(f(m.planarityPct, 1), 9)
                   + pad(f(m.peakAccG, 2), 7))
+        }
+    }
+
+    /// Mean ± sd, for the compact by-label table.
+    static func pm(_ s: Spread?, _ dec: Int) -> String {
+        guard let s else { return "—" }
+        return f(s.mean, dec) + "±" + f(s.sd, dec)
+    }
+
+    static func byLabel(_ strokes: [StrokeMetrics], _ tags: TagMatcher.Result) {
+        let groups = SessionStats.byLabel(strokes, tags)
+        guard !groups.isEmpty else { return }
+
+        print("")
+        print("BY LABEL")
+        print("  " + pad("label", 15, right: false) + pad("n", 4)
+              + pad("arc°", 14) + pad("dur/s", 14) + pad("peak°/s", 14)
+              + pad("decel°/s²", 15) + pad("repeat", 9))
+        print("  " + rule(85))
+        for g in groups {
+            let rep = g.repeatabilityCV.map { f($0, 1) + "%" } ?? "—"
+            let note = g.repeatabilityCV.map { "  " + verdict($0) } ?? "  (needs 3+)"
+            print("  " + pad(g.label.name, 15, right: false)
+                  + pad(String(g.count), 4)
+                  + pad(pm(g.spread("Arc swept"), 1), 14)
+                  + pad(pm(g.spread("Duration"), 3), 14)
+                  + pad(pm(g.spread("Peak rate"), 0), 14)
+                  + pad(pm(g.spread("Stop decel"), 0), 15)
+                  + pad(rep, 9)
+                  + note)
+        }
+
+        print("")
+        print("  Each group is measured against its own kind. A pickup and a delivery are")
+        print("  different movements, so the session-wide repeatability above mixes them")
+        print("  and reads worse than any single group actually is — compare within a row,")
+        print("  not against the overall figure.")
+    }
+
+    /// Tagging that came apart, and strokes it missed.
+    static func untaggedNote(_ strokes: [StrokeMetrics], _ tags: TagMatcher.Result) {
+        guard !tags.matches.isEmpty || !tags.unmatched.isEmpty else { return }
+
+        let missed = SessionStats.untagged(strokes, tags)
+        if !missed.isEmpty {
+            print("")
+            print("  \(missed.count) detected stroke\(missed.count == 1 ? "" : "s") "
+                  + "went untagged: "
+                  + missed.map { "#\($0.index)" }.joined(separator: " "))
+        }
+        if !tags.unmatched.isEmpty {
+            print("")
+            print("  \(tags.unmatched.count) tap\(tags.unmatched.count == 1 ? "" : "s") "
+                  + "matched no stroke:")
+            for u in tags.unmatched.prefix(8) {
+                print("    " + pad(f(u.tapTime, 2) + "s", 9) + "  "
+                      + pad(u.label.name, 15, right: false) + u.reason)
+            }
+            if tags.unmatched.count > 8 {
+                print("    … and \(tags.unmatched.count - 8) more")
+            }
+            print("")
+            print("  Taps that land nowhere usually mean the tagger drifted a stroke behind,")
+            print("  or a movement the caster made wasn't big enough to detect. Check the")
+            print("  labels above before trusting the grouping.")
         }
     }
 
@@ -150,7 +236,9 @@ enum Report {
     // MARK: - JSON
 
     static func json(session: CSVReader.Session, strokes: [StrokeMetrics],
-                     other: CSVReader.Session?, otherStrokes: [StrokeMetrics]) -> String {
+                     tags: TagMatcher.Result,
+                     other: CSVReader.Session?, otherStrokes: [StrokeMetrics],
+                     otherTags: TagMatcher.Result) -> String {
         func esc(_ s: String) -> String {
             "\"" + s.replacingOccurrences(of: "\\", with: "\\\\")
                     .replacingOccurrences(of: "\"", with: "\\\"") + "\""
@@ -159,15 +247,22 @@ enum Report {
             let r = (v * pow(10, Double(d))).rounded() / pow(10, Double(d))
             return r.isFinite ? String(r) : "null"
         }
-        func strokeObj(_ m: StrokeMetrics) -> String {
-            """
+        func strokeObj(_ m: StrokeMetrics, _ t: TagMatcher.Result) -> String {
+            // The tap's own offset rides along with the label: a consumer that
+            // wants to re-snap tags under different detector settings needs to
+            // see how far each tap actually trailed its stroke.
+            let match = t.match(forStroke: m.index)
+            let label = match.map { esc($0.label.name) } ?? "null"
+            let tapOffset = match.map { n($0.offset) } ?? "null"
+            return """
             {"index":\(m.index),"startTime":\(n(m.startTime)),"duration":\(n(m.duration)),\
             "samples":\(m.sampleCount),"arcDeg":\(n(m.arcDeg)),"pathDeg":\(n(m.pathDeg)),\
             "planarityPct":\(n(m.planarityPct)),"dominantAxis":\(esc(m.dominantAxis)),\
             "peakRateDPS":\(n(m.peakRateDPS)),"peakRateAtPct":\(n(m.peakRateAtPct)),\
             "accelPhase":\(n(m.accelPhase)),"stopPhase":\(n(m.stopPhase)),\
             "peakDecelDPS2":\(n(m.peakDecelDPS2)),"stopSharePct":\(n(m.stopSharePct)),\
-            "peakAccG":\(n(m.peakAccG)),"tempo":\(n(m.tempo))}
+            "peakAccG":\(n(m.peakAccG)),"tempo":\(n(m.tempo)),\
+            "label":\(label),"tapOffset":\(tapOffset)}
             """
         }
         func spreadObj(_ s: Spread) -> String {
@@ -176,18 +271,37 @@ enum Report {
             "sd":\(n(s.sd)),"cvPct":\(n(s.cvPct)),"min":\(n(s.min)),"max":\(n(s.max))}
             """
         }
-        func sessionObj(_ s: CSVReader.Session, _ m: [StrokeMetrics]) -> String {
+        func groupObj(_ g: LabelGroup) -> String {
+            let rep = g.repeatabilityCV.map { n($0) } ?? "null"
+            return """
+            {"label":\(esc(g.label.name)),"count":\(g.count),"repeatabilityCV":\(rep),\
+            "strokes":[\(g.strokes.map { String($0.index) }.joined(separator: ","))],\
+            "spreads":[\(g.spreads.map(spreadObj).joined(separator: ","))]}
+            """
+        }
+        func unmatchedObj(_ u: TagMatcher.Unmatched) -> String {
+            """
+            {"label":\(esc(u.label.name)),"tapTime":\(n(u.tapTime)),"reason":\(esc(u.reason))}
+            """
+        }
+        func sessionObj(_ s: CSVReader.Session, _ m: [StrokeMetrics],
+                        _ t: TagMatcher.Result) -> String {
             let rep = SessionStats.repeatabilityCV(m).map { n($0) } ?? "null"
+            let groups = SessionStats.byLabel(m, t)
             return """
             {"name":\(esc(s.name)),"device":\(esc(s.deviceName)),\
             "samples":\(s.readings.count),"duration":\(n(s.duration)),\
             "sampleRateHz":\(n(s.sampleRateHz)),"repeatabilityCV":\(rep),\
-            "strokes":[\(m.map(strokeObj).joined(separator: ","))],\
-            "spreads":[\(SessionStats.spreads(m).map(spreadObj).joined(separator: ","))]}
+            "tagged":\(t.matches.count),\
+            "strokes":[\(m.map { strokeObj($0, t) }.joined(separator: ","))],\
+            "spreads":[\(SessionStats.spreads(m).map(spreadObj).joined(separator: ","))],\
+            "byLabel":[\(groups.map(groupObj).joined(separator: ","))],\
+            "untaggedStrokes":[\(SessionStats.untagged(m, t).map { String($0.index) }.joined(separator: ","))],\
+            "unmatchedTaps":[\(t.unmatched.map(unmatchedObj).joined(separator: ","))]}
             """
         }
-        var out = "{\"session\":" + sessionObj(session, strokes)
-        if let o = other { out += ",\"compare\":" + sessionObj(o, otherStrokes) }
+        var out = "{\"session\":" + sessionObj(session, strokes, tags)
+        if let o = other { out += ",\"compare\":" + sessionObj(o, otherStrokes, otherTags) }
         return out + "}"
     }
 }

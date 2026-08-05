@@ -37,6 +37,8 @@ final class Collector: NSObject {
     private let options: Options
     private let session = BLESession()
     private var writer: CSVWriter?
+    private var events: EventLogWriter?
+    private var tagger: KeyTagger?
     private var statusTimer: Timer?
 
     private let lock = NSLock()
@@ -52,6 +54,8 @@ final class Collector: NSObject {
     private var checkSamples: [SensorReading] = []
     private var saturation = SaturationCounter()
     private lazy var glitches = GlitchFilter(dropsGlitches: options.despike)
+    private var tagTotal = 0
+    private var lastTag: (label: StrokeLabel, at: Date)?
     private var didStartConnecting = false
     private var didArmCheckTimer = false
 
@@ -87,6 +91,7 @@ final class Collector: NSObject {
                 Term.log("error: \(error)")
                 exit(1)
             }
+            startTagging(alongside: url)
         }
 
         if let rate = options.rate {
@@ -102,6 +107,52 @@ final class Collector: NSObject {
 
         startStatusTimer()
         session.startScan()
+    }
+
+    /// Opens the tag sidecar and starts listening for keys.
+    ///
+    /// Best-effort throughout: a terminal that can't be reconfigured, or a
+    /// sidecar that can't be opened, costs you tagging and nothing else. The
+    /// sensor data is the thing worth protecting.
+    private func startTagging(alongside csv: URL) {
+        guard options.tagging else { return }
+        guard KeyTagger.isAvailable else {
+            // Nothing to say when output is piped — that's a script, not a person.
+            return
+        }
+
+        let url = options.eventsPath.map { URL(fileURLWithPath: $0) }
+            ?? EventLog.sidecarURL(for: csv)
+        do {
+            events = try EventLogWriter(url: url)
+        } catch {
+            Term.log("note: no stroke tagging (\(error))")
+            return
+        }
+
+        let keys = KeyTagger { [weak self] key in self?.handleKey(key) }
+        guard keys.start() else {
+            events?.close()
+            events = nil
+            Term.log("note: no stroke tagging (this terminal can't report keypresses)")
+            return
+        }
+        tagger = keys
+
+        Term.log("Tagging to \(url.lastPathComponent) — press as each stroke finishes:")
+        Term.log("  " + StrokeLabel.keyLegend)
+    }
+
+    /// A tag is a human action at a human instant, so it's stamped here, the
+    /// moment the byte arrives — not after any queue hop.
+    private func handleKey(_ key: Character) {
+        guard let label = StrokeLabel.forKey(key) else { return }
+        let now = Date()
+        lock.lock()
+        events?.record(label, at: now)
+        tagTotal += 1
+        lastTag = (label, now)
+        lock.unlock()
     }
 
     private func armStopTimer(after seconds: TimeInterval) {
@@ -141,6 +192,8 @@ final class Collector: NSObject {
         let reading = latest
         let line = statusLine
         let raw = rawPackets
+        let tags = tagTotal
+        let recent = lastTag
         lock.unlock()
 
         let rejected = session.parserStats.rejected
@@ -178,6 +231,15 @@ final class Collector: NSObject {
             // Surfaced always, not just when nonzero — a rising count is the
             // signal that framing has gone wrong and the CSV is untrustworthy.
             parts.append("rejected \(rejected)")
+        }
+        if events != nil {
+            parts.append("tags \(tags)")
+            // Echo the last tag briefly. The tagger is watching the caster, not
+            // the screen, so this is for the glance afterwards that confirms the
+            // key actually landed.
+            if let r = recent, Date().timeIntervalSince(r.at) < 1.5 {
+                parts.append("← \(r.label.name)")
+            }
         }
         Term.status(parts.joined(separator: "   "))
     }
@@ -302,6 +364,10 @@ final class Collector: NSObject {
 
         statusTimer?.invalidate()
         session.disconnect()
+        // Hand the terminal back before anything else prints, so the shell isn't
+        // left without echo if a later step exits early.
+        tagger?.stop()
+        tagger = nil
         Term.endStatus()
 
         lock.lock()
@@ -312,10 +378,13 @@ final class Collector: NSObject {
         totalSamples += tail.count
         let w = writer
         writer = nil
+        let e = events
+        events = nil
         let total = totalSamples
         lock.unlock()
 
         w?.close()
+        e?.close()
 
         let stats = session.parserStats
 
@@ -328,6 +397,16 @@ final class Collector: NSObject {
 
         if let url = w?.url {
             Term.log("Wrote \(total) samples to \(url.path)")
+        }
+        if let e {
+            if e.tags.isEmpty {
+                // The empty sidecar would be a trap for castr-analyze to find
+                // later, and an untagged session should look untagged.
+                try? FileManager.default.removeItem(at: e.url)
+            } else {
+                Term.log("Tagged \(e.tags.count) strokes — \(e.summary)")
+                Term.log("  \(e.url.path)")
+            }
         }
         if !options.listAll {
             Term.log("Frames accepted \(stats.accepted), rejected \(stats.rejected), "

@@ -19,7 +19,7 @@ proves about the sensor carries straight over to the phone.
 
 ```sh
 swift build                              # ~2.5 min cold on an Intel Mac
-swift run castr-selftest                 # 116 checks, no hardware required
+swift run castr-selftest                 # 284 checks, no hardware required
 ./.build/debug/castr-collect --help
 ```
 
@@ -44,12 +44,76 @@ samples rather than the whole session.
     --rate <hz>      Set sensor output rate (10|20|50|100|200) and save it
     --device <name>  Only connect to a device whose name contains this
     --seconds <n>    Stop automatically after n seconds
+    --events <path>  Write stroke tags here (default: <out>.events.csv)
+    --no-tags        Don't read the keyboard for stroke tags
 ```
 
 The live status line reports sample count, measured rate, current acceleration, and a
 **rejected-frame count**. That last number is the one to watch: the sensor's frame
 format carries no checksum, so a rising reject count is the only signal that framing has
 gone wrong and the CSV can't be trusted.
+
+## Tagging strokes as they happen
+
+A recording knows a stroke occurred; it can't know it was a pickup rather than a
+delivery. Someone watching can, and marking it live costs them one keypress.
+
+While `castr-collect` is recording at a terminal, four keys are live:
+
+```
+1 pickup    2 false back    3 false forward    4 delivery
+(or p / b / f / d)
+```
+
+The iOS app puts the same four on screen as thumb-sized buttons, with a haptic on
+each press — the tagger is watching the caster, not the phone. Either way this is
+built for **two people**: one casts, one taps. Nothing changes if nobody does.
+
+**Press as the stroke finishes.** Reaction lag is expected and corrected for, so
+tapping late is normal and tapping precisely is not required.
+
+### Where tags go
+
+A sidecar, `<session>.events.csv`, beside the recording:
+
+```
+time,label
+2026-08-03 14:22:31.402,pickup
+2026-08-03 14:22:32.840,false back
+```
+
+Not an extra CSV column — `CSVFormat` is byte-parity with WitMotion's own export,
+which is the whole reason recordings drop into existing analysis unchanged, and a
+22nd column would break every consumer that checks the header's shape. A session
+nobody tagged leaves no sidecar at all.
+
+### How a tap becomes a label
+
+A tap is not a measurement of when something happened. The tagger watches the
+stroke, recognises it, then presses — and at false-casting tempo, strokes run
+~0.6 s with ~0.3 s between them, which is *shorter than a human reaction*. Taken
+literally, most taps land inside the **following** stroke.
+
+So matching corrects before it snaps:
+
+1. Every tap is shifted back by an assumed reaction lag (0.25 s, `--lag`).
+2. Distance is then measured to each stroke's **end** — the instant the tagger is
+   reacting to — not to the nearest point of its span. That distinction matters
+   whenever strokes run back to back: in `cast2.csv` stroke 3 ends 6 ms before
+   stroke 4 begins, and only an end-referenced distance puts the tap on stroke 3.
+3. A tap that corrects to *before* a stroke finished still counts, at a penalty —
+   anticipating the stop happens, but it's the exception.
+4. One label per stroke, one stroke per tap, assigned cheapest-first. A double tap
+   can't slide onto the neighbouring stroke and shift every label after it; the
+   surplus tap is reported instead.
+
+The raw time survives all of this. `castr-analyze` reports the median lag it
+actually measured — if that's far from the 0.25 s it corrected out, rerun with
+`--lag` near the measured figure.
+
+Taps that match nothing, and strokes nobody tagged, are both printed. A run of
+either means the tagging came apart from the casting, and the grouping below
+shouldn't be trusted until you've looked.
 
 ## Analysing a session
 
@@ -78,6 +142,28 @@ Across strokes it reports spread, flags outliers, and reduces the whole session 
 **repeatability** figure — the mean coefficient of variation over arc, duration, peak
 rate and stop deceleration. Planarity and peak acceleration are deliberately excluded:
 they track the mount and geometry more than technique.
+
+If the session was tagged, a sidecar next to the CSV is picked up automatically and
+each kind of stroke is also reported **against its own kind**:
+
+```
+BY LABEL
+  label             n          arc°         dur/s       peak°/s      decel°/s²   repeat
+  ─────────────────────────────────────────────────────────────────────────────────────
+  pickup            4      64.2±4.1   0.412±0.019        381±22        2140±180     8.4%  very consistent
+  false back       12      88.7±9.0   0.388±0.024        602±48       3980±410    11.2%  consistent
+```
+
+That grouping is the point of tagging. A pickup and a delivery are different
+movements, so a session-wide repeatability figure mixes them and reads as
+inconsistency the caster doesn't have — the same session above scores 65.7%
+ungrouped. Compare within a row, not against the overall figure.
+
+```sh
+swift run castr-analyze cast2.csv --lag 0.4         # a slower tagger
+swift run castr-analyze cast2.csv --no-events       # ignore the sidecar
+swift run castr-analyze cast2.csv --events other.csv
+```
 
 Comparisons weigh each difference against the stroke-to-stroke variation inside each
 session, so a change smaller than a caster's own noise is reported as `within noise`
@@ -163,10 +249,14 @@ Sources/
     CSVWriter.swift        streaming writer; CSVFormat defines the columns
     SensorReading.swift    the sample type
     SyntheticSource.swift  wire-format generator for tests and fixtures
+    StrokeAnalysis.swift   segmentation, per-stroke metrics, spread stats
+    EventLog.swift         StrokeLabel and the tag sidecar, read and write
+    TagMatching.swift      binds taps to strokes; groups strokes by label
   CastrBLE/        CoreBluetooth. Builds for macOS and iOS.
     BLEManager.swift       BLESession — scan, connect, stream, off the main thread
     ObservableBLE.swift    SwiftUI wrapper, throttled to 10 Hz
   castr-collect/   The macOS CLI
+    KeyTagger.swift        single-keypress reader; leaves Ctrl-C working
   castr-selftest/  Test runner and fixture generator
 ios/               iOS app sources, parked until Xcode is installed
 ```
@@ -288,11 +378,21 @@ listed and enabled.
   monotonic and keeps the aggregate rate accurate — but the absolute time of any single
   sample is still only as good as the host clock. Fine for cast duration and
   segmentation; check drift before syncing against separate video.
-- **No analysis layer yet.** Column names match the real WitMotion export and the nine
-  channels we decode carry real values; the other ten columns are present and blank.
-  Turning recordings into per-stroke metrics is the next piece of work, not something
-  that exists. The header is UTF-8 and contains `°`, a common cause of header-matching
-  failures if a file gets read as latin-1.
+- **Ten CSV columns are blank.** Column names match the real WitMotion export and the
+  nine channels we decode carry real values; the rest are present but empty, so
+  analysis code selecting them by name finds them instead of raising. The header is
+  UTF-8 and contains `°`, a common cause of header-matching failures if a file gets
+  read as latin-1.
+- **Tagging is single-device.** The tap has to come from whatever is doing the
+  recording, because that's the only way both share a clock. A second person tagging
+  from their own phone would need the two clocks reconciled, and host-clock drift is
+  already the weakest link in the timestamps.
+- **Labels are only as good as the tagger.** Matching corrects for a consistent
+  reaction lag, not for a tagger who lost the rhythm or named the wrong stroke.
+  `castr-analyze` prints the measured lag, the taps it couldn't place and the strokes
+  nobody tagged — read those before trusting a by-label table.
+- **The browser analyser ignores sidecars.** `docs/index.html` takes one dropped CSV
+  and knows nothing about tags; grouping by label is `castr-analyze` only.
 - **BLE range** is roughly 10 m, so Mac-tethered collection means the laptop comes
   outside with you. That's what the iOS app is for.
 
@@ -302,6 +402,11 @@ Sources are in `ios/`, unbuildable until Xcode is installed. When it is: create 
 SwiftUI app project, add `CastrCore` and `CastrBLE` as local package dependencies rather
 than copying the files, and set `Privacy - Bluetooth Always Usage Description` in the
 target's Info tab.
+
+`ContentView.swift` has never been compiled — no Xcode, no iOS SDK, so it is parsed
+but not type-checked. The tagging logic it calls into lives in `CastrCore` and
+`CastrBLE`, which are covered by `castr-selftest`; the four buttons and their share
+sheet are the part still unverified. Expect to fix something on first build.
 
 Two things to know before relying on the phone in the field. Signing with a **free**
 Apple ID expires the app after **7 days** — it stops launching and needs re-deploying

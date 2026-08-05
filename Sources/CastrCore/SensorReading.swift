@@ -57,4 +57,28 @@ public extension SensorReading {
     var timeString: String {
         Self.timestampFormatter.string(from: timestamp)
     }
+
+    /// Every timestamp shape that turns up in a file we're expected to read,
+    /// most specific first. WitMotion exports sometimes carry microseconds;
+    /// ours are always milliseconds.
+    static let timestampParsers: [DateFormatter] = {
+        ["yyyy-MM-dd HH:mm:ss.SSSSSS",
+         "yyyy-MM-dd HH:mm:ss.SSS",
+         "yyyy-MM-dd HH:mm:ss"].map { format in
+            let d = DateFormatter()
+            d.dateFormat = format
+            d.locale = Locale(identifier: "en_US_POSIX")
+            d.calendar = Calendar(identifier: .gregorian)
+            return d
+        }
+    }()
+
+    /// Shared by the CSV reader and the event-log reader, so a sidecar and its
+    /// recording can never disagree about what a timestamp means.
+    static func parseTimestamp(_ s: String) -> Date? {
+        for p in Self.timestampParsers {
+            if let d = p.date(from: s) { return d }
+        }
+        return nil
+    }
 }

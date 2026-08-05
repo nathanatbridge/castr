@@ -27,12 +27,27 @@ public final class ObservableBLE: NSObject, ObservableObject {
     @Published public private(set) var recordingURL: URL?
     @Published public private(set) var lastError: String?
 
+    /// Stroke tags pressed during this recording. Published per tap rather than
+    /// on the timer — a tap is a deliberate action and its button has to
+    /// acknowledge it immediately, unlike a sample nobody asked for.
+    @Published public private(set) var tagCounts: [StrokeLabel: Int] = [:]
+    @Published public private(set) var lastTag: StrokeLabel?
+    @Published public private(set) var eventsURL: URL?
+
+    public var tagTotal: Int { tagCounts.values.reduce(0, +) }
+
+    /// Everything the session produced, for the share sheet.
+    public var exportURLs: [URL] {
+        [recordingURL, tagTotal > 0 ? eventsURL : nil].compactMap { $0 }
+    }
+
     public var uiRefreshHz: Double = 10
 
     // MARK: - Internals
 
     private let session = BLESession()
     private var writer: CSVWriter?
+    private var events: EventLogWriter?
     private var timer: Timer?
 
     // Written on the BLE queue, read on the main queue via the timer.
@@ -52,6 +67,7 @@ public final class ObservableBLE: NSObject, ObservableObject {
     deinit {
         timer?.invalidate()
         writer?.close()
+        events?.close()
     }
 
     private func startTimer() {
@@ -130,11 +146,38 @@ public final class ObservableBLE: NSObject, ObservableObject {
             recordingURL = url
             isRecording = true
             lastError = nil
-            return url
         } catch {
             lastError = "\(error)"
             return nil
         }
+
+        // Tagging is best-effort: a sidecar that won't open costs you the labels
+        // and nothing else, so it must never fail the recording.
+        tagCounts = [:]
+        lastTag = nil
+        let sidecar = EventLog.sidecarURL(for: url)
+        events = try? EventLogWriter(url: sidecar)
+        eventsURL = events != nil ? sidecar : nil
+
+        return url
+    }
+
+    /// Marks the stroke the caster just made.
+    ///
+    /// Stamped here, first thing, on whichever thread pressed the button: the
+    /// tap time *is* the datum, and routing it through a queue before reading
+    /// the clock would fold scheduling delay into a measurement that already
+    /// carries a few hundred milliseconds of human reaction time.
+    public func tag(_ label: StrokeLabel) {
+        let now = Date()
+        guard isRecording else { return }
+
+        lock.lock()
+        events?.record(label, at: now)
+        lock.unlock()
+
+        tagCounts[label, default: 0] += 1
+        lastTag = label
     }
 
     public func stopRecording() {
@@ -142,8 +185,18 @@ public final class ObservableBLE: NSObject, ObservableObject {
         lock.lock()
         let w = writer
         writer = nil
+        let e = events
+        events = nil
         lock.unlock()
         w?.close()
+        e?.close()
+
+        // A session nobody tagged should look untagged, not leave an empty
+        // sidecar for castr-analyze to find and puzzle over later.
+        if let e, e.tags.isEmpty {
+            try? FileManager.default.removeItem(at: e.url)
+            eventsURL = nil
+        }
         isRecording = false
     }
 }

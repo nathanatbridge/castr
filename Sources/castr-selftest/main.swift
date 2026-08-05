@@ -103,6 +103,8 @@ print("")
 runGlitchFilterTests()
 print("")
 runStrokeAnalysisTests()
+print("")
+runEventTaggingTests()
 
 print("")
 if Check.failed == 0 {

@@ -66,22 +66,9 @@ public enum CSVReader {
         let missing = required.filter { index[$0] == nil }
         guard missing.isEmpty else { throw ReadError.missingColumns(missing) }
 
-        // WitMotion exports sometimes carry microseconds; ours are milliseconds.
-        let formats = ["yyyy-MM-dd HH:mm:ss.SSSSSS",
-                       "yyyy-MM-dd HH:mm:ss.SSS",
-                       "yyyy-MM-dd HH:mm:ss"]
-        let parsers = formats.map { f -> DateFormatter in
-            let d = DateFormatter()
-            d.dateFormat = f
-            d.locale = Locale(identifier: "en_US_POSIX")
-            d.calendar = Calendar(identifier: .gregorian)
-            return d
-        }
-
-        func date(_ s: String) -> Date? {
-            for p in parsers { if let d = p.date(from: s) { return d } }
-            return nil
-        }
+        // Timestamp shapes live on SensorReading so the event-log sidecar parses
+        // its `time` column exactly the same way this does.
+        let date = SensorReading.parseTimestamp
 
         let deviceIdx = index["DeviceName"]
         var device = ""

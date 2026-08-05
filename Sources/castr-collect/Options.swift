@@ -12,6 +12,11 @@ struct Options {
     var checkMode = false
     var despike = false
     var showHelp = false
+    /// Live stroke tagging. On by default when recording from a real terminal —
+    /// it costs nothing when nobody presses a key, and a session that wasn't
+    /// tagged simply leaves an empty sidecar.
+    var tagging = true
+    var eventsPath: String?
 
     static let usage = """
     castr-collect — record WT901BLE motion data to CSV
@@ -27,6 +32,8 @@ struct Options {
           --despike        Drop corrupt single-sample spikes. The frame format
                            has no checksum, so ~1 sample in 4000 can be garbage;
                            left in, they distort peaks and derivatives.
+          --events <path>  Write stroke tags here (default: <out>.events.csv).
+          --no-tags        Don't read the keyboard for stroke tags.
           --raw            Hex-dump packets instead of parsing. Bring-up step 2:
                            confirms the sensor really sends 20-byte 55 61 frames.
           --any            List every BLE peripheral, not just WitMotion ones.
@@ -44,6 +51,20 @@ struct Options {
       castr-collect --check                  # is it reading correctly?
       castr-collect -o backyard.csv --despike   # record a clean cast
       castr-collect --replay fixture.hex -o synthetic.csv
+
+    TAGGING STROKES AS THEY HAPPEN
+
+    While recording at a terminal, these keys mark what the caster just did:
+
+      1 pickup    2 false back    3 false forward    4 delivery
+      (or p / b / f / d)
+
+    Tags go to a sidecar file, not into the CSV, so the recording stays
+    byte-identical to a WitMotion export. `castr-analyze` picks the sidecar up
+    automatically and reports each kind of stroke against its own kind.
+
+    Press as the stroke finishes — reaction lag is expected and corrected for.
+    This is meant for a second pair of hands: one person casts, one watches.
 
     Recording streams to disk continuously — the CSV is valid even if this
     process is killed mid-session.
@@ -73,6 +94,8 @@ struct Options {
             case "--any":           options.listAll = true
             case "--check":         options.checkMode = true
             case "--despike":       options.despike = true
+            case "--no-tags":       options.tagging = false
+            case "--events":        options.eventsPath = try next(arg)
             case "--replay":        options.replayPath = try next(arg)
             case "--device":        options.deviceName = try next(arg)
             case "--seconds":

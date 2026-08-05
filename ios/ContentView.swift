@@ -5,23 +5,28 @@ import CastrBLE
 
 struct ContentView: View {
     @StateObject private var ble = ObservableBLE()
-    @State private var shareURL: ShareableCSV?
+    @State private var shareItem: ShareableFiles?
 
     var body: some View {
         NavigationStack {
-            VStack(spacing: 16) {
-                statusSection
+            ScrollView {
+                VStack(spacing: 16) {
+                    statusSection
 
-                if ble.isConnected {
-                    liveReadingSection
-                    recordingSection
-                } else {
-                    connectionSection
+                    if ble.isConnected {
+                        // While recording, the tag buttons are the whole point of
+                        // the screen — whoever is holding the phone is watching
+                        // the caster, not reading numbers. Everything else moves
+                        // below them.
+                        if ble.isRecording { taggingSection }
+                        recordingSection
+                        liveReadingSection
+                    } else {
+                        connectionSection
+                    }
                 }
-
-                Spacer()
+                .padding()
             }
-            .padding()
             .navigationTitle("CastR")
         }
     }
@@ -61,6 +66,76 @@ struct ContentView: View {
             }
             .listStyle(.plain)
             .frame(minHeight: 200)
+        }
+    }
+
+    /// Four big buttons, one per stroke type.
+    ///
+    /// Sized and coloured for a thumb belonging to someone who is looking at the
+    /// caster rather than the screen: a 2×2 grid of full-width targets, each a
+    /// different colour, each showing its own running count so a glance
+    /// afterwards confirms the taps landed. A haptic on every press is the real
+    /// feedback — it's the only channel available to someone not watching.
+    private var taggingSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("Mark strokes").font(.headline)
+                Spacer()
+                if ble.tagTotal > 0 {
+                    Text("\(ble.tagTotal) tagged")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            Text("Tap as each stroke finishes. Reaction lag is expected — analysis "
+                 + "corrects for it.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            LazyVGrid(columns: [GridItem(.flexible(), spacing: 10),
+                                GridItem(.flexible(), spacing: 10)], spacing: 10) {
+                ForEach(StrokeLabel.allCases, id: \.self) { label in
+                    Button {
+                        ble.tag(label)
+                        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                    } label: {
+                        VStack(spacing: 4) {
+                            Text(label.name.capitalized)
+                                .font(.headline)
+                                .minimumScaleFactor(0.7)
+                                .lineLimit(1)
+                            Text("\(ble.tagCounts[label] ?? 0)")
+                                .font(.system(.title3, design: .rounded).weight(.semibold))
+                                .monospacedDigit()
+                        }
+                        .frame(maxWidth: .infinity, minHeight: 72)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(tint(for: label))
+                }
+            }
+
+            if let last = ble.lastTag {
+                Text("last: \(last.name)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            if ble.eventsURL == nil {
+                // Say so rather than silently dropping taps.
+                Text("Tags can't be saved for this recording.")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            }
+        }
+    }
+
+    /// Distinct colours so the grid can be hit by position and colour alone.
+    private func tint(for label: StrokeLabel) -> Color {
+        switch label {
+        case .pickup:       return .blue
+        case .falseBack:    return .orange
+        case .falseForward: return .teal
+        case .delivery:     return .green
         }
     }
 
@@ -109,12 +184,12 @@ struct ContentView: View {
                 .buttonStyle(.borderedProminent)
                 .tint(ble.isRecording ? .red : .green)
 
-                Button("Export CSV") {
-                    // Recording streams straight to this file, so there's nothing
-                    // to serialize here — just hand over the URL.
-                    if let url = ble.recordingURL {
-                        shareURL = ShareableCSV(url: url)
-                    }
+                Button("Export") {
+                    // Recording streams straight to these files, so there's
+                    // nothing to serialize here — just hand over the URLs. The
+                    // tag sidecar goes with the CSV or the labels are lost.
+                    let urls = ble.exportURLs
+                    if !urls.isEmpty { shareItem = ShareableFiles(urls: urls) }
                 }
                 .buttonStyle(.bordered)
                 .disabled(ble.isRecording || ble.recordingURL == nil)
@@ -124,21 +199,21 @@ struct ContentView: View {
                 Text(error).font(.caption).foregroundStyle(.red)
             }
         }
-        .sheet(item: $shareURL) { item in
-            ShareSheet(activityItems: [item.url])
+        .sheet(item: $shareItem) { item in
+            ShareSheet(activityItems: item.urls)
         }
     }
 }
 
-/// Identifiable wrapper so a URL can drive `.sheet(item:)`.
+/// Identifiable wrapper so the export set can drive `.sheet(item:)`.
 ///
-/// The previous version computed its URL in a getter that *wrote the file as a
+/// An earlier version computed its URL in a getter that *wrote the file as a
 /// side effect* — SwiftUI may evaluate a computed property on every render, so
-/// that re-serialized the whole session repeatedly. The file now already exists
-/// on disk; this just points at it.
-struct ShareableCSV: Identifiable {
-    let url: URL
-    var id: String { url.path }
+/// that re-serialized the whole session repeatedly. The files now already exist
+/// on disk; this just points at them.
+struct ShareableFiles: Identifiable {
+    let urls: [URL]
+    var id: String { urls.map(\.path).joined(separator: "|") }
 }
 
 /// Thin UIKit bridge for the standard iOS share sheet.
