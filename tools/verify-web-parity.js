@@ -80,6 +80,12 @@ strokes.forEach((s, i) => {
     failures++;
     console.log(`  ✗ stroke ${i + 1} samples: swift ${e.samples}, js ${s.samples}`);
   }
+  // The signed rotation is what separates a back cast from a forward cast, so
+  // a sign difference between the ports matters more than any magnitude here.
+  "XYZ".split("").forEach((axis, k) => {
+    check(`stroke ${i + 1} netRotationDeg ${axis}`,
+          s.netRotationDeg[k], e.netRotationDeg[k], 5e-3);
+  });
 });
 if (!failures) console.log(`  ✓ all ${FIELDS.length} metrics match on every stroke`);
 

@@ -58,24 +58,32 @@ if let flagIndex = args.firstIndex(of: "--emit-csv") {
             clock += 1 / hz
         }
     }
-    rest(0.6)
-    for k in 0..<count {
-        // Vary peak and duration so the spread statistics have something to chew on.
-        let peak = 380.0 + Double(k) * 55.0
-        let dur = 0.40 + Double(k % 3) * 0.06
+    func bell(peak: Double, dur: Double) {
         let n = Int(dur * hz)
         for i in 0..<n {
             let u = Double(i) / Double(n)
             let rate = peak * exp(-pow((u - 0.5) / 0.22, 2))
             readings.append(SensorReading(
                 timestamp: base.addingTimeInterval(clock),
-                accX: 0.01 + rate / 900, accY: -0.02, accZ: 1.0 + rate / 1400,
+                accX: 0.01 + abs(rate) / 900, accY: -0.02, accZ: 1.0 + abs(rate) / 1400,
                 gyroX: rate, gyroY: rate * 0.04, gyroZ: -rate * 0.02,
                 angleX: 0, angleY: 0, angleZ: 0))
             clock += 1 / hz
         }
+    }
+
+    rest(0.6)
+    for k in 0..<count {
+        // Vary peak and duration so the spread statistics have something to chew on.
+        bell(peak: 380.0 + Double(k) * 55.0, dur: 0.40 + Double(k % 3) * 0.06)
         rest(0.7)
     }
+    // A back-to-back reversal, the shape real casting makes: the rod turns
+    // around without ever settling. Nothing else in this fixture exercises
+    // reversal splitting, and that is where the two ports can silently drift.
+    bell(peak: 430, dur: 0.40)
+    bell(peak: -430, dur: 0.40)
+    rest(0.7)
 
     do {
         let url = URL(fileURLWithPath: path)

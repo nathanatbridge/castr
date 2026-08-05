@@ -112,9 +112,13 @@ public enum TagMatcher {
     /// its span. What a tagger reacts to is the stroke *finishing*, so that's
     /// the instant the tap is aimed at — and scoring the whole span as an equal
     /// hit gets this wrong whenever strokes run back to back, which they do at
-    /// tempo. In `cast2.csv` stroke 3 ends 6 ms before stroke 4 begins; a tap
+    /// tempo. In `cast2.csv` stroke 3 ends 5 ms before stroke 4 begins; a tap
     /// half a second into that long stroke 4 belongs to stroke 3, and only an
     /// end-referenced distance says so.
+    ///
+    /// Reversal splitting made this stricter, not looser: a back cast and the
+    /// forward cast after it are cut at one shared sample, so the pair is 5 ms
+    /// apart by construction. Adjacency is now the normal case, not the corner.
     static func cost(tap: TimeInterval, start: TimeInterval, end: TimeInterval,
                      _ s: Settings) -> TimeInterval? {
         let d = tap - end

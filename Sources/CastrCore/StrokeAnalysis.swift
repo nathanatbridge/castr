@@ -12,6 +12,15 @@ import Foundation
 /// Uses hysteresis: a stroke opens at `enterDPS` and doesn't close until rate has
 /// stayed below `exitDPS` for `settleTime`. A single threshold chatters through
 /// the noisy tail of a stroke and splits one cast into several.
+///
+/// Rate alone is not enough to end a stroke. At real casting tempo the rod never
+/// stops between a back cast and the forward cast that follows: measured across
+/// the corpus, the trough between the two stays below 25 °/s for at most 0.13 s
+/// and usually 0.00–0.08 s, so `settleTime` is never satisfied and the pair is
+/// reported as one stroke whose opposing rotations cancel. `fish1` #22 is the
+/// clearest case — +307 °/s one way, then −383 °/s back, netting an arc of 18.9°
+/// off a path of 242°. Direction, not rate, is what separates them, so
+/// `splitAtReversals` runs before the duration guard.
 public struct StrokeDetector {
 
     public var enterDPS: Double = 60
@@ -26,6 +35,18 @@ public struct StrokeDetector {
     /// movement that never fully settled — several motions run together — and
     /// get split at their quietest interior moment rather than reported as one.
     public var maxDuration: TimeInterval = 3.0
+    /// Two bursts of rotation whose net directions are at least this far apart
+    /// are opposing strokes, not one stroke. Across the corpus this measure is
+    /// sharply bimodal: 62 of 68 burst pairs inside a merged span sat at
+    /// 150–180°, the rest at 86° or below, so anything in the middle is absent.
+    public var reversalAngleDeg: Double = 120
+    /// A burst carrying less of the span's rotation than this share of its
+    /// largest burst is a wobble inside one stroke, not a stroke of its own.
+    /// Relative, not absolute, because §4c of PLAN.md showed no constant arc
+    /// threshold survives: `benchtest2` casts ranged 67–152° with no line at
+    /// all. The ripples measured 17–21° against 76–129° mains — 0.17–0.27 of
+    /// the largest — while genuine pairs sit at 0.8–1.0.
+    public var minBurstShare: Double = 0.4
 
     public init() {}
 
@@ -65,10 +86,85 @@ public struct StrokeDetector {
                 merged.append(span)
             }
         }
-        let split = merged.flatMap { splitIfTooLong($0, r, rate, depth: 0) }
+        let split = merged
+            .flatMap { splitAtReversals($0, r, rate) }
+            .flatMap { splitIfTooLong($0, r, rate, depth: 0) }
         return split.filter { span in
             r[span.upperBound - 1].timestamp.timeIntervalSince(r[span.lowerBound].timestamp) >= minDuration
         }
+    }
+
+    /// Splits a span wherever the rod turned around.
+    ///
+    /// A back cast and the forward cast after it are the same movement in
+    /// opposite directions, so their net rotation vectors point ~180° apart.
+    /// Bursts of rotation within the span are compared pairwise and the span is
+    /// cut between any two that oppose, at the quietest sample between them.
+    private func splitAtReversals(_ span: Range<Int>,
+                                  _ r: [SensorReading],
+                                  _ rate: [Double]) -> [Range<Int>] {
+        // Bursts: contiguous runs at or above the rate that opens a stroke.
+        var bursts: [Range<Int>] = []
+        var open: Int? = nil
+        for i in span {
+            if rate[i] >= enterDPS {
+                if open == nil { open = i }
+            } else if let s = open {
+                bursts.append(s..<i)
+                open = nil
+            }
+        }
+        if let s = open { bursts.append(s..<span.upperBound) }
+        guard bursts.count > 1 else { return [span] }
+
+        let nets = bursts.map { Self.netRotation(r, $0) }
+        guard let largest = nets.map(Self.magnitude).max(), largest > 0 else { return [span] }
+        let kept = zip(bursts, nets).filter { Self.magnitude($0.1) >= minBurstShare * largest }
+        guard kept.count > 1 else { return [span] }
+
+        var cuts: [Int] = []
+        for k in 1..<kept.count {
+            guard Self.angleBetween(kept[k - 1].1, kept[k].1) >= reversalAngleDeg else { continue }
+            let between = kept[k - 1].0.upperBound..<kept[k].0.lowerBound
+            guard let quietest = between.min(by: { rate[$0] < rate[$1] }) else { continue }
+            cuts.append(quietest)
+        }
+        guard !cuts.isEmpty else { return [span] }
+
+        var out: [Range<Int>] = []
+        var lower = span.lowerBound
+        for cut in cuts {
+            out.append(lower..<cut)
+            lower = cut
+        }
+        out.append(lower..<span.upperBound)
+        return out
+    }
+
+    /// Rotation integrated over a span, as a vector — the signed form of the
+    /// arc that `StrokeAnalyzer` later collapses to a magnitude.
+    static func netRotation(_ r: [SensorReading], _ span: Range<Int>) -> [Double] {
+        var net = [0.0, 0.0, 0.0]
+        for i in span where i + 1 < r.count {
+            let dt = r[i + 1].timestamp.timeIntervalSince(r[i].timestamp)
+            net[0] += r[i].gyroX * dt
+            net[1] += r[i].gyroY * dt
+            net[2] += r[i].gyroZ * dt
+        }
+        return net
+    }
+
+    static func magnitude(_ v: [Double]) -> Double {
+        (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).squareRoot()
+    }
+
+    /// Angle between two rotation vectors, in degrees. Zero-length vectors have
+    /// no direction, so they are reported as 0° — never a reversal.
+    static func angleBetween(_ a: [Double], _ b: [Double]) -> Double {
+        let ma = magnitude(a), mb = magnitude(b)
+        guard ma > 0, mb > 0 else { return 0 }
+        let cos = (a[0] * b[0] + a[1] * b[1] + a[2] * b[2]) / (ma * mb)
+        return Foundation.acos(Swift.max(-1, Swift.min(1, cos))) * 180 / .pi
     }
 
     /// Recursively halves an over-long span at its quietest interior sample.
@@ -107,6 +203,11 @@ public struct StrokeMetrics {
 
     /// Net rotation — how far the rod actually turned, end to end.
     public let arcDeg: Double
+    /// The same rotation before it was collapsed to a magnitude, as X/Y/Z
+    /// degrees. A back cast and a forward cast are one movement in opposite
+    /// directions, so the sign is what tells them apart — `arcDeg` alone
+    /// cannot. Kept because throwing it away is what hid the merged pairs.
+    public let netRotationDeg: [Double]
     /// Total angular distance travelled, including any back-and-forth.
     public let pathDeg: Double
     /// Share of net rotation about the dominant axis. 100% is a perfect plane.
@@ -199,6 +300,7 @@ public enum StrokeAnalyzer {
             duration: duration,
             sampleCount: n,
             arcDeg: arc,
+            netRotationDeg: net,
             pathDeg: path,
             planarityPct: planarity,
             dominantAxis: ["X", "Y", "Z"][dom],

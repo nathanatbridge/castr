@@ -69,10 +69,74 @@
 
   var DEFAULTS = {
     enterDPS: 60, exitDPS: 25, settleTime: 0.12,
-    minDuration: 0.08, mergeGap: 0.10, maxDuration: 3.0
+    minDuration: 0.08, mergeGap: 0.10, maxDuration: 3.0,
+    reversalAngleDeg: 120, minBurstShare: 0.4
   };
 
   function rateOf(r) { return Math.sqrt(r.gx * r.gx + r.gy * r.gy + r.gz * r.gz); }
+
+  function netRotation(r, lo, hi) {
+    var net = [0, 0, 0];
+    for (var i = lo; i < hi && i + 1 < r.length; i++) {
+      var dt = r[i + 1].t - r[i].t;
+      net[0] += r[i].gx * dt; net[1] += r[i].gy * dt; net[2] += r[i].gz * dt;
+    }
+    return net;
+  }
+
+  function magnitude(v) {
+    return Math.sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
+  }
+
+  function angleBetween(a, b) {
+    var ma = magnitude(a), mb = magnitude(b);
+    if (!(ma > 0) || !(mb > 0)) return 0;
+    var c = (a[0] * b[0] + a[1] * b[1] + a[2] * b[2]) / (ma * mb);
+    return Math.acos(Math.max(-1, Math.min(1, c))) * 180 / Math.PI;
+  }
+
+  /* A back cast and the forward cast after it are the same movement in
+     opposite directions, so their net rotation vectors point ~180° apart. At
+     casting tempo the rod never settles between them and rate alone reports
+     the pair as one stroke whose rotations cancel. See StrokeAnalysis.swift. */
+  function splitAtReversals(span, r, rate, o) {
+    var bursts = [], open = null, i;
+    for (i = span[0]; i < span[1]; i++) {
+      if (rate[i] >= o.enterDPS) {
+        if (open === null) open = i;
+      } else if (open !== null) {
+        bursts.push([open, i]); open = null;
+      }
+    }
+    if (open !== null) bursts.push([open, span[1]]);
+    if (bursts.length < 2) return [span];
+
+    var nets = bursts.map(function (b) { return netRotation(r, b[0], b[1]); });
+    var largest = Math.max.apply(null, nets.map(magnitude));
+    if (!(largest > 0)) return [span];
+
+    var kept = [];
+    for (i = 0; i < bursts.length; i++) {
+      if (magnitude(nets[i]) >= o.minBurstShare * largest) kept.push([bursts[i], nets[i]]);
+    }
+    if (kept.length < 2) return [span];
+
+    var cuts = [];
+    for (i = 1; i < kept.length; i++) {
+      if (angleBetween(kept[i - 1][1], kept[i][1]) < o.reversalAngleDeg) continue;
+      var lo = kept[i - 1][0][1], hi = kept[i][0][0];
+      if (hi <= lo) continue;
+      var quietest = lo;
+      for (var j = lo; j < hi; j++) if (rate[j] < rate[quietest]) quietest = j;
+      cuts.push(quietest);
+    }
+    if (!cuts.length) return [span];
+
+    var out = [], lower = span[0];
+    cuts.forEach(function (cut) { out.push([lower, cut]); lower = cut; });
+    out.push([lower, span[1]]);
+    return out;
+  }
 
   function splitIfTooLong(span, r, rate, opts, depth) {
     var dur = r[span[1] - 1].t - r[span[0]].t;
@@ -119,7 +183,9 @@
 
     var split = [];
     merged.forEach(function (s) {
-      split = split.concat(splitIfTooLong(s, readings, rate, o, 0));
+      splitAtReversals(s, readings, rate, o).forEach(function (p) {
+        split = split.concat(splitIfTooLong(p, readings, rate, o, 0));
+      });
     });
     return split.filter(function (s) {
       return readings[s[1] - 1].t - readings[s[0]].t >= o.minDuration;
@@ -179,6 +245,7 @@
       duration: duration,
       samples: n,
       arcDeg: arc,
+      netRotationDeg: net.slice(),
       pathDeg: path,
       planarityPct: planarity,
       dominantAxis: ["X", "Y", "Z"][dom],

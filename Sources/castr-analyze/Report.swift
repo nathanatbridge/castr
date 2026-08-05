@@ -256,7 +256,9 @@ enum Report {
             let tapOffset = match.map { n($0.offset) } ?? "null"
             return """
             {"index":\(m.index),"startTime":\(n(m.startTime)),"duration":\(n(m.duration)),\
-            "samples":\(m.sampleCount),"arcDeg":\(n(m.arcDeg)),"pathDeg":\(n(m.pathDeg)),\
+            "samples":\(m.sampleCount),"arcDeg":\(n(m.arcDeg)),\
+            "netRotationDeg":[\(m.netRotationDeg.map { n($0) }.joined(separator: ","))],\
+            "pathDeg":\(n(m.pathDeg)),\
             "planarityPct":\(n(m.planarityPct)),"dominantAxis":\(esc(m.dominantAxis)),\
             "peakRateDPS":\(n(m.peakRateDPS)),"peakRateAtPct":\(n(m.peakRateAtPct)),\
             "accelPhase":\(n(m.accelPhase)),"stopPhase":\(n(m.stopPhase)),\

@@ -75,6 +75,45 @@ func runStrokeAnalysisTests() {
         }
     }
 
+    test("a back-and-forward pair with no rest between them splits in two") {
+        // The fish1 case: at tempo the rod never settles between the back cast
+        // and the forward cast, so rate alone leaves them as one stroke.
+        let r = concat([stroke(peakDPS: 500, duration: 0.4, restAfter: 0.0),
+                        stroke(peakDPS: -500, duration: 0.4, at: 0.9, restBefore: 0.0)])
+        Check.equal(StrokeDetector().detect(r).count, 2, "strokes")
+    }
+
+    test("a split pair recovers its arc instead of cancelling") {
+        // Undetected, the two halves net to nothing — fish1 #22 read 18.9° of
+        // arc off 242° of path. Each half must carry its own rotation.
+        let alone = StrokeAnalyzer.analyze(stroke(peakDPS: 500, duration: 0.4)).first
+        guard let single = alone else { Check.isTrue(false, "no lone stroke"); return }
+
+        let r = concat([stroke(peakDPS: 500, duration: 0.4, restAfter: 0.0),
+                        stroke(peakDPS: -500, duration: 0.4, at: 0.9, restBefore: 0.0)])
+        let m = StrokeAnalyzer.analyze(r)
+        Check.equal(m.count, 2, "strokes")
+        for s in m {
+            Check.close(s.arcDeg, single.arcDeg, single.arcDeg * 0.1, "arc of each half")
+        }
+    }
+
+    test("two bursts in the same direction stay one stroke") {
+        // Only a reversal ends a stroke. Same-direction motion that never
+        // settles is one continuous sweep, and stays the duration guard's job.
+        let r = concat([stroke(peakDPS: 500, duration: 0.4, restAfter: 0.0),
+                        stroke(peakDPS: 500, duration: 0.4, at: 0.9, restBefore: 0.0)])
+        Check.equal(StrokeDetector().detect(r).count, 1, "strokes")
+    }
+
+    test("a small reversal inside a stroke does not split it") {
+        // A wobble is not a cast. The test is relative — PLAN.md §4c showed no
+        // constant arc threshold survives the corpus.
+        let r = concat([stroke(peakDPS: 500, duration: 0.4, restAfter: 0.0),
+                        stroke(peakDPS: -90, duration: 0.12, at: 0.9, restBefore: 0.0)])
+        Check.equal(StrokeDetector().detect(r).count, 1, "strokes")
+    }
+
     test("arc matches the rotation actually applied") {
         // Integral of the bell, computed independently of the code under test.
         let peak = 600.0, dur = 0.5, hz = 200.0

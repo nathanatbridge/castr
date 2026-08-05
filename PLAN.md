@@ -23,47 +23,63 @@ Live **stroke tagging** shipped and works:
   (`BY LABEL` section). `--lag`, `--events`, `--no-events` control it.
 - `TagMatcher` corrects for reaction lag and measures distance to each stroke's
   **end**, not its span — see the comment in `TagMatching.swift` for why (strokes
-  run back-to-back at tempo; `cast2.csv` #3 ends 6 ms before #4 starts).
+  run back-to-back at tempo; `cast2.csv` #3 ends 5 ms before #4 starts).
 
-Covered by `castr-selftest`. 284 checks pass.
+**Reversal-aware segmentation** also ships — see §5, which it resolves — along with the
+signed net rotation vector §2 is built on.
+
+Covered by `castr-selftest`. 290 checks pass.
 
 ---
 
 ## 2. The central finding: direction is free, and we were discarding it
 
-`StrokeAnalysis.swift` integrates rotation into a net vector and then collapses it to
-a magnitude, throwing the sign away:
+`StrokeAnalysis.swift` used to integrate rotation into a net vector and then collapse it
+to a magnitude, throwing the sign away:
 
 ```swift
 let arc = (net[0]*net[0] + net[1]*net[1] + net[2]*net[2]).squareRoot()
 ```
 
-A back cast and a forward cast are the same motion in opposite directions. Recovering
-the sign and projecting onto the session's dominant rotation axis:
+`arcDeg` still reports that magnitude, but the vector behind it is now kept as
+`netRotationDeg`. It cost two lines and it is the whole back/forward discriminator.
 
-| session | casting strokes | signs about the session axis |
+A back cast and a forward cast are the same motion in opposite directions. Projecting
+the signed rotation onto the session's dominant rotation axis:
+
+| session | casting strokes | alternation breaks |
 |---|---|---|
-| cast2 | 6 | `+ − + − + −` |
-| slow1 | 10 | `+ − + − + − + − + −` |
-| benchtest1 | 18 | `− + − + − + − + − + − + − + − + − +` |
+| slow1 | 19 | 1 — the pickup, see below |
+| cast2 | 16 | 0 |
+| benchtest1 | 19 | 0 |
+| benchtest2 | 32 | 0 |
+| benchtest3 | 44 | 0 |
+| fish1 | 48 | 0 |
 
-**34 casting strokes, strictly alternating, zero exceptions.** This is the strongest
-result in the project and the thing the classifier should be built on.
+**178 casting strokes across six sessions, strictly alternating, one break.** That break
+is `slow1` #1, the pickup, which is Z-dominant (83.8° of a 99.9° arc) while every cast
+in the session is X-dominant — it is off the casting plane, so its projection onto the
+casting axis carries no meaning. This is the strongest result in the project and the
+thing the classifier should be built on.
+
+This supersedes an earlier count of 34 strokes over three sessions. The figure was low
+because the detector was merging cast pairs — see §5, which is now resolved. Signed
+rotation is emitted as `netRotationDeg` on `StrokeMetrics`, so this table can be
+reproduced from `castr-analyze --json` rather than a scratch script.
 
 Secondary findings:
 
 - **The pickup separates on its own.** `slow1` #1 and `benchtest1` #1 both came out on
   the **Z** axis while every cast is on **X**, with long durations (1.55 s, 2.39 s) and
   low peak rates. The lift is off the casting plane.
-- **Repositioning rejects cleanly** on arc magnitude — real casts were 90–127°,
-  repositioning 5–33°, in the three sessions that established the pattern. *(But see
-  §4: this threshold has since broken.)*
 - **Burst structure is obvious.** Within-burst gaps 0.2–2.7 s; between-burst 5–21 s.
-
-A working prototype classifier exists in Python only — it was scratch work and was not
-kept. It did: session axis by total |net| over big strokes → reject small-arc and
-off-axis → group into bursts by gap → alternate back/forward from sign → first cast of
-burst is pickup, last forward is delivery. It reproduced the table above correctly.
+- ~~Repositioning rejects cleanly on arc magnitude~~ — **false, and it was the symptom
+  that should have exposed §5 earlier.** The "repositioning" of 5–33° in `cast2` and
+  `slow1` was not repositioning. Those were back-and-forward cast *pairs* merged into
+  one span, whose opposing rotations cancelled to near zero. `cast2` was read as 6 casts
+  plus repositioning; it is 16 casts. A near-zero arc over a long, fast span is the
+  signature of a merged pair, not of a small movement — `pathDeg` tells them apart and
+  was already being computed.
 
 ---
 
@@ -112,6 +128,10 @@ Measured delivery tap lag:
 Wrong model: with line on you are not reacting to the rod stopping, you are waiting
 for the line to shoot and land.
 
+Re-measured after the §5 segmentation fix: the lags and the match counts are unchanged.
+Splitting merged pairs moves stroke *ends* very little, so this defect is independent of
+that one and is still entirely open.
+
 **Do not just widen the window** — that degrades false-cast matching. The fix is that a
 **delivery tap should bind to a burst, not a stroke.** The delivery is that burst's
 last forward cast regardless of how late the key was pressed, which tolerates a
@@ -134,12 +154,46 @@ must become **relative to the session**, not a constant.
 
 ---
 
-## 5. Open question, not yet investigated
+## 5. Resolved: the `fish1` anomaly was a detector defect
 
-**`fish1` shows 52 detected strokes but only 5 above 60° arc** — completely unlike every
-other session. Could be genuine fishing motion (stripping line, repositioning, walking)
-or the detector behaving differently under load. **Understand this before building on
-it.** It is the most realistic session in the corpus and the anomaly is unexplained.
+**`fish1` showed 52 detected strokes but only 5 above 60° arc.** Nothing was wrong with
+the session. The detector was merging each back cast with the forward cast that followed
+it, and their opposing rotations cancelled.
+
+`fish1` #22 is the clearest case: one "stroke" of 2.02 s containing gyroX peaks of
+**+307 °/s at 86.2 s and −383 °/s at 87.2 s** — a back cast and a forward cast — reported
+as an arc of **18.9° off a path of 242°**.
+
+Why rate alone could never close these strokes: between the two casts the rate dips below
+`exitDPS` (25 °/s) for **0.00–0.13 s**, and `settleTime` requires 0.12 s. At casting
+tempo the rod does not stop, so the stroke never ends. `benchtest1` escaped it only
+because it was the butt section with no line, which does stop dead.
+
+How widespread it was, over spans containing more than one burst of rotation:
+
+| session | spans | multi-cast spans | share |
+|---|---|---|---|
+| benchtest1 | 21 | 0 | 0% |
+| slow1 | 14 | 2 | 14% |
+| cast2 | 11 | 2 | 18% |
+| fish1 | 51 | 22 | 43% |
+| benchtest3 | 31 | 16 | 52% |
+| benchtest2 | 21 | 12 | 57% |
+
+**The three sessions that established §2's original finding were the three least
+affected.** The result generalised anyway, but it was measured on the easy cases.
+
+**Fix, shipped:** `StrokeDetector.splitAtReversals` cuts a span wherever the rod turns
+around. Bursts of rotation within a span are compared by the angle between their net
+rotation vectors. The measure is sharply bimodal — of 68 burst pairs inside merged spans,
+**62 sat at 150–180°** (genuine reversals, each burst a 90–130° cast) and the rest at 86°
+or below (wobbles of 17–21° inside one stroke). Nothing lands in between, so
+`reversalAngleDeg` at 120° has wide margin either side. The burst-size gate
+(`minBurstShare`) is relative to the largest burst in the span, not an absolute arc,
+because §4c showed no constant survives.
+
+This is why the sign mattered twice over: discarding it did not only cost the
+back/forward label, it hid the fact that two strokes had been recorded as one.
 
 ---
 
@@ -147,16 +201,23 @@ it.** It is the most realistic session in the corpus and the anomaly is unexplai
 
 Session CSVs are in the repo root. Sidecars are `<name>.events.csv`.
 
-| session | samples | dur | rate | strokes | casts ≥60° | taps | what it is |
+Stroke and cast counts are **post-fix** (§5); the figures in brackets are what the same
+sessions read before reversal splitting, kept because most of the earlier analysis in
+this document was written against them.
+
+| session | samples | dur | rate | strokes | casts | taps | what it is |
 |---|---|---|---|---|---|---|---|
 | `cast1` | 5,010 | 101 s | 50 Hz | 0 | 0 | — | **gyro all zero — useless** |
 | `test1` | 530 | 11 s | 49 Hz | 0 | 0 | — | **gyro all zero — useless** |
-| `slow1` | 2,228 | 45 s | 50 Hz | 14 | 11 | — | slow casting; Z-axis lift + 10 alternating |
-| `cast2` | 8,568 | 44 s | 195 Hz | 11 | 6 | — | real casting; probable delivery at the end |
-| `benchtest1` | 11,615 | 59 s | 198 Hz | 21 | 19 | 10 | **butt section only**, no line, solo. 18 alternating strokes, **no delivery**. Tags are garbage (9× delivery) — solo tagging failed. |
-| `benchtest2` | 15,308 | 77 s | 198 Hz | 21 | 9 | 5 | full rod, no line, multi-sequence, delivery-only tagging |
-| `benchtest3` | 20,598 | 104 s | 199 Hz | 32 | 12 | 5 | full rod, **20 ft line**. Includes at least one deliberate non-delivery stop. |
-| `fish1` | 36,848 | 186 s | 198 Hz | 52 | 5 | 6 | **natural fishing, 15 → 40 ft progressive**. Most realistic session. See §5. |
+| `slow1` | 2,228 | 45 s | 50 Hz | 19 *(14)* | 19 *(11)* | — | slow casting; Z-axis lift + 18 alternating |
+| `cast2` | 8,568 | 44 s | 195 Hz | 16 *(11)* | 16 *(6)* | — | real casting; probable delivery at the end |
+| `benchtest1` | 11,615 | 59 s | 198 Hz | 21 *(21)* | 19 *(19)* | 10 | **butt section only**, no line, solo. **No delivery.** The one session unaffected by §5 — it stops dead between casts. Tags are garbage (9× delivery) — solo tagging failed. |
+| `benchtest2` | 15,308 | 77 s | 198 Hz | 34 *(21)* | 32 *(9)* | 5 | full rod, no line, multi-sequence, delivery-only tagging |
+| `benchtest3` | 20,598 | 104 s | 199 Hz | 49 *(32)* | 44 *(12)* | 5 | full rod, **20 ft line**. Includes at least one deliberate non-delivery stop. |
+| `fish1` | 36,848 | 186 s | 198 Hz | 82 *(52)* | 48 *(5)* | 6 | **natural fishing, 15 → 40 ft progressive**. Most realistic session. |
+
+"Casts" counts strokes at or above a **relative** arc threshold — half the median arc of
+the largest third of the session. §4c rules out a constant.
 
 All recent sessions are healthy hardware-wise: `benchtest1` measured 1.021 g at rest,
 no clipping (peak 7.15 g of 16, 887 °/s of 2000), 99.6% unique timestamps, zero
@@ -169,14 +230,16 @@ export managed 18.4% unique with 40 backwards.
 
 ## 7. Roadmap
 
-**Stage 0 — fix what §4 found.** The two tagging defects. Delivery binds to a burst;
-pre-stream taps are held or discarded.
+**Stage 0 — fix what §4 and §5 found.** *Segmentation is done* — `splitAtReversals`
+ships, with the parity fixture extended to cover it. Still open: the two tagging
+defects. Delivery binds to a burst; pre-stream taps are held or discarded.
 
-**Stage 1 — stop discarding signal.** Add to `StrokeMetrics`: signed net rotation
-vector, `restBefore`/`restAfter` gaps, rod elevation from gravity at the still moments
-either side. The elevation field must be **optional and emitted blank** when there is
-no genuine still window — `cast2` #3→#5 have 0.00 s gaps and the estimate came back
-inverted. Same discipline as the ten blank CSV columns.
+**Stage 1 — stop discarding signal.** *Signed net rotation is done* — `netRotationDeg`
+on `StrokeMetrics`, in the JSON, and checked for sign agreement by the parity tool.
+Still to add: `restBefore`/`restAfter` gaps, rod elevation from gravity at the still
+moments either side. The elevation field must be **optional and emitted blank** when
+there is no genuine still window — `cast2` #3→#5 have 0.00 s gaps and the estimate came
+back inverted. Same discipline as the ten blank CSV columns.
 
 **Stage 2 — session casting frame.** Principal axis over per-stroke net rotations;
 project each stroke onto it for a mount-independent signed arc. Sign anchor: the
@@ -220,11 +283,12 @@ Not yet done. Ordered by value.
 
 ## 9. Immediate next steps
 
-1. Investigate the `fish1` anomaly (§5).
-2. Fix the two tagging defects (§4a, §4b).
-3. Full analysis pass across all six usable sessions.
-4. Build Stages 1–3 into `CastrCore`, with tests in `castr-selftest`.
+1. ~~Investigate the `fish1` anomaly~~ — done, and fixed. See §5.
+2. Fix the two tagging defects (§4a, §4b). Neither was affected by the §5 fix.
+3. Finish Stage 1: `restBefore`/`restAfter` and the optional elevation field.
+4. Stages 2–3 — session casting frame, then burst segmentation.
 5. Stage 4 classifier on top.
 
-**Uncommitted at handoff:** the entire event-tagging feature and these two documents.
-See `git status`.
+**Worth doing early, now that there is far more data than the roadmap assumed:**
+§8's mount-orientation test. Stage 2 normalisation is the next real design decision and
+that test can invalidate it in five minutes.

@@ -11,7 +11,7 @@ currently stands.
 
 ```sh
 swift build
-swift run castr-selftest              # 284 checks, no hardware needed
+swift run castr-selftest              # 290 checks, no hardware needed
 node tools/verify-web-parity.js       # browser analysis must match Swift
 ```
 

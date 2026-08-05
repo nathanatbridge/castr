@@ -19,7 +19,7 @@ proves about the sensor carries straight over to the phone.
 
 ```sh
 swift build                              # ~2.5 min cold on an Intel Mac
-swift run castr-selftest                 # 284 checks, no hardware required
+swift run castr-selftest                 # 290 checks, no hardware required
 ./.build/debug/castr-collect --help
 ```
 
@@ -99,7 +99,7 @@ So matching corrects before it snaps:
 1. Every tap is shifted back by an assumed reaction lag (0.25 s, `--lag`).
 2. Distance is then measured to each stroke's **end** — the instant the tagger is
    reacting to — not to the nearest point of its span. That distinction matters
-   whenever strokes run back to back: in `cast2.csv` stroke 3 ends 6 ms before
+   whenever strokes run back to back: in `cast2.csv` stroke 3 ends 5 ms before
    stroke 4 begins, and only an end-referenced distance puts the tap on stroke 3.
 3. A tap that corrects to *before* a stroke finished still counts, at a penalty —
    anticipating the stop happens, but it's the exception.
@@ -127,6 +127,14 @@ Strokes are segmented on **rotation rate**, not acceleration. A cast is fundamen
 rotation of the rod, and the handle's linear acceleration is dominated by gravity's
 changing direction as the rod tilts — an acceleration threshold fires on slow
 repositioning that isn't a stroke at all.
+
+Rate alone won't end a stroke, though. At casting tempo the rod never stops between a
+back cast and the forward cast after it, so a rate threshold reports the pair as one
+stroke and their opposing rotations cancel — in `fish1.csv` that turned two casts into a
+single span of 242° of travel and 19° of net arc. Strokes are therefore also split
+wherever the rod **turns around**: bursts of rotation whose net directions lie more than
+120° apart are separate strokes. Small reversals are a wobble inside one stroke, and the
+size test is relative to the span, since no constant arc threshold holds across sessions.
 
 What each stroke reports:
 
