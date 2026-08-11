@@ -1,0 +1,859 @@
+#!/bin/bash
+#
+# One command per recording. Picks the filename, runs the health check, prints the
+# protocol for the test you asked for, records, analyses, and backs up.
+#
+#   cast dad 20ft
+#
+# CAPTURE.md is the authority on why each step exists; this script is that document
+# made executable so a session can be run without reading it again.
+
+set -u
+cd "$(dirname "$0")" || exit 1
+
+COLLECT=./.build/debug/castr-collect
+ANALYZE=./.build/debug/castr-analyze
+BACKUP="$HOME/Documents/castr-sessions"
+RATE=200
+
+bold=$(tput bold 2>/dev/null || true)
+dim=$(tput dim 2>/dev/null || true)
+red=$(tput setaf 1 2>/dev/null || true)
+green=$(tput setaf 2 2>/dev/null || true)
+yellow=$(tput setaf 3 2>/dev/null || true)
+off=$(tput sgr0 2>/dev/null || true)
+
+say()  { printf '%s\n' "$*"; }
+head1() { printf '\n%s%s%s\n' "$bold" "$*" "$off"; }
+warn() { printf '%s%s%s\n' "$yellow" "$*" "$off"; }
+die()  { printf '%s%s%s\n' "$red" "$*" "$off" >&2; exit 1; }
+
+usage() {
+    cat <<'EOF'
+cast <person> <test>      record a session
+cast calibrate            mount poses — start of session, and after any remount
+cast profile <person>     per-person reference measurements — once, not per session
+cast check                health check only, no recording
+cast list                 what has been recorded so far
+cast protocol             the field card — what to type at every prompt
+
+TESTS
+  updown      Test 0 — reference motion, no tags. Do this first, once per person.
+  noline      Test 1 — short sequences, no line
+  20ft        Test 2 — 20 ft of line, real deliveries
+  fish        Test 3 — natural fishing, progressive line
+  falsecast   counted forward false casts, no tags
+  tagged      two-person session, a second person tags every stroke
+
+EXAMPLES
+  cast nate updown
+  cast dad 20ft
+EOF
+}
+
+# ---------------------------------------------------------------- build
+
+ensure_built() {
+    local newest
+    # Rebuild when any source is newer than the binary. Recording against a stale
+    # build is the kind of thing you only notice a session later.
+    newest=$(find Sources Package.swift -type f -newer "$COLLECT" 2>/dev/null | head -1)
+    if [ ! -x "$COLLECT" ] || [ ! -x "$ANALYZE" ] || [ -n "$newest" ]; then
+        say "${dim}Building…${off}"
+        swift build || die "build failed — fix that before recording"
+    fi
+}
+
+# ---------------------------------------------------------------- health check
+
+run_check() {
+    head1 "Health check"
+    cat <<EOF
+Put the sensor flat on a hard surface and take your hands off it.
+This measures for 15 s and tells you whether it still reads the 1.000 g it must
+at rest. Re-run it whenever the sensor is remounted or the rod changes.
+EOF
+    printf '\n%sPress Enter when it is still and untouched…%s' "$bold" "$off"
+    read -r _
+
+    "$COLLECT" --check
+    local status=$?
+
+    if [ $status -ne 0 ]; then
+        warn ""
+        warn "Health check FAILED. Do not record against this — the session will look"
+        warn "fine and won't be. Fix it (recalibrate in the WitMotion app, or hold the"
+        warn "sensor still and retry) and run cast check again."
+        return 1
+    fi
+    return 0
+}
+
+# ---------------------------------------------------------------- pose capture
+
+CALIB=calibration
+
+# Mean gravity vector and stillness for a still-pose CSV, as:
+#   samples meanAccX meanAccY meanAccZ |acc| gyroMeanDPS gyroPeakDPS
+# Columns 3-5 are AccX/Y/Z(g) and 6-8 AsX/Y/Z(°/s) in the WitMotion layout.
+#
+# Optional args 2 and 3 restrict it to a range of data rows (1-based, header
+# excluded), so the three still windows can be pulled out of one continuous
+# recording without cutting the file up.
+pose_stats() {
+    awk -F, -v s="${2:-1}" -v e="${3:-0}" 'NR > 1 && NF > 8 {
+        d = NR - 1
+        if (d < s) next
+        if (e > 0 && d > e) next
+        n++; ax += $3; ay += $4; az += $5
+        g = sqrt($6*$6 + $7*$7 + $8*$8); gs += g; if (g > gp) gp = g
+    }
+    END {
+        if (n == 0) { print "0 0 0 0 0 0 0"; exit }
+        ax /= n; ay /= n; az /= n
+        printf "%d %.4f %.4f %.4f %.4f %.2f %.2f\n",
+               n, ax, ay, az, sqrt(ax*ax + ay*ay + az*az), gs/n, gp
+    }' "$1"
+}
+
+# Thresholds are StaticCheck's, deliberately. Two definitions of "still" in one
+# project is how you end up trusting the wrong one.
+STILL_FAIL_DPS=20
+STILL_WARN_DPS=5
+GRAV_FAIL_G=0.10
+GRAV_WARN_G=0.03
+
+POSE_SECONDS=5
+
+# Records one still pose and gates it. Returns 1 if the pose is unusable.
+#
+# The window is measured in *data*, not wall clock: castr-collect's --seconds
+# starts counting at launch, so scanning and connecting would silently eat most
+# of a 5 s pose. Collector.swift makes exactly this point about --check, which
+# starts its clock on the first sample; --seconds never got the same treatment.
+# So this watches the CSV grow and stops the recorder once the samples are in,
+# which also gives an honest countdown to hold still against.
+capture_pose() {
+    local label="$1" file="$2" spoken="$3"
+    # The sweep is a motion, not a pose, so it needs the opposite prompt order.
+    local prompt="${4:-Press Enter once it is still and hands are off.}"
+
+    head1 "$label"
+    say ""
+    say "  ${dim}Read this out:${off}"
+    printf '%s\n' "$spoken"
+    say ""
+    printf '  %s%s%s ' "$bold" "$prompt" "$off"
+    read -r _
+
+    local target=$(( RATE * POSE_SECONDS ))
+    local rows=0 ticks=0 flowing=0
+
+    trap '' INT
+    # A generous ceiling only — the SIGTERM below is what actually ends it, and
+    # castr-collect's own handler flushes and closes the CSV cleanly.
+    # TERM not INT: a shell sets SIGINT to ignored in background commands, so
+    # `kill -INT` here is silently dropped. Collector handles both identically.
+    "$COLLECT" -o "$file" --despike --rate "$RATE" --seconds 60 --no-tags >/dev/null 2>&1 &
+    local pid=$!
+
+    while kill -0 "$pid" 2>/dev/null; do
+        if [ -e "$file" ]; then rows=$(wc -l < "$file" | tr -d ' '); else rows=0; fi
+        [ "$rows" -gt 1 ] && rows=$(( rows - 1 )) || rows=0
+
+        if [ "$rows" -ge "$target" ]; then
+            kill -TERM "$pid" 2>/dev/null
+            break
+        fi
+
+        if [ "$rows" -eq 0 ]; then
+            printf '\r\033[2K  %sConnecting to the sensor…%s' "$dim" "$off"
+            ticks=$(( ticks + 1 ))
+            # ~20 s with no sample at all means it is never coming.
+            if [ "$ticks" -gt 100 ]; then
+                kill -TERM "$pid" 2>/dev/null
+                break
+            fi
+        else
+            flowing=1
+            local filled=$(( rows * 24 / target )) bar= i=0
+            while [ $i -lt 24 ]; do
+                [ $i -lt $filled ] && bar="$bar#" || bar="$bar."
+                i=$(( i + 1 ))
+            done
+            printf '\r\033[2K  %sHOLD STILL%s  [%s]  %ds' \
+                "$bold" "$off" "$bar" $(( (target - rows + RATE - 1) / RATE ))
+        fi
+        sleep 0.2
+    done
+
+    wait "$pid" 2>/dev/null
+    trap - INT
+    stty sane 2>/dev/null
+    printf '\r\033[2K'
+
+    if [ "$flowing" -eq 0 ] || [ ! -s "$file" ]; then
+        warn "  Nothing recorded — the sensor never connected."
+        warn "  Check it is on and charged, and that Bluetooth is allowed for this terminal."
+        return 1
+    fi
+
+    set -- $(pose_stats "$file")
+    POSE_N=$1; POSE_X=$2; POSE_Y=$3; POSE_Z=$4; POSE_MAG=$5; POSE_GMEAN=$6; POSE_GPEAK=$7
+
+    # Three seconds of data is the floor a still pose is worth trusting. The old
+    # threshold of 100 samples was half a second and would have passed a window
+    # that connecting had eaten.
+    if [ "$POSE_N" -lt $(( RATE * 3 )) ]; then
+        warn "  Only $POSE_N samples — under 3 s of data. The capture was cut short."
+        warn "  Retry; if it keeps happening the sensor is dropping out."
+        return 1
+    fi
+
+    say "  ${green}${bold}DONE — you can move the rod now.${off}"
+    say ""
+    say "  ${dim}samples   $POSE_N  (~$(( POSE_N / RATE )) s)${off}"
+    say "  ${dim}gravity   X $POSE_X  Y $POSE_Y  Z $POSE_Z   (|acc| $POSE_MAG g)${off}"
+    say "  ${dim}stillness gyro peak $POSE_GPEAK °/s${off}"
+
+    if awk "BEGIN{exit !($POSE_GPEAK > $STILL_FAIL_DPS)}"; then
+        warn "  FAIL — the rod moved during the window (peak $POSE_GPEAK °/s)."
+        warn "  Find better footing or support and retry. A shaky pose is worse than none."
+        return 1
+    fi
+    if awk "BEGIN{exit !(($POSE_MAG - 1.0) ^ 2 > $GRAV_FAIL_G ^ 2)}"; then
+        warn "  FAIL — gravity reads $POSE_MAG g, not 1.000. Run cast check."
+        return 1
+    fi
+    if awk "BEGIN{exit !($POSE_GPEAK > $STILL_WARN_DPS)}"; then
+        warn "  warn — some movement (peak $POSE_GPEAK °/s). Usable, but steadier is better."
+    fi
+    if awk "BEGIN{exit !(($POSE_MAG - 1.0) ^ 2 > $GRAV_WARN_G ^ 2)}"; then
+        warn "  warn — gravity $POSE_MAG g is off 1.000 by more than 0.03 g."
+    fi
+    say "  ${green}ok${off}"
+    return 0
+}
+
+# Data rows written so far, header excluded.
+rows_now() {
+    local r=0
+    [ -e "$SEQ_FILE" ] && r=$(wc -l < "$SEQ_FILE" | tr -d ' ')
+    [ "$r" -gt 1 ] && printf '%d' $(( r - 1 )) || printf '0'
+}
+
+# Runs one timed phase of the calibration sequence against the already-running
+# recorder, counting in samples rather than wall clock so a BLE stall shows up
+# as a longer hold rather than a silently short window.
+# Sets PHASE_START and PHASE_END to the data rows it spanned.
+phase() {
+    local headline="$1" secs="$2" style="${3:-hold}"
+    local begin; begin=$(rows_now)
+    local target=$(( begin + RATE * secs ))
+    local r
+
+    while kill -0 "$SEQ_PID" 2>/dev/null; do
+        r=$(rows_now)
+        [ "$r" -ge "$target" ] && break
+        local done_n=$(( r - begin )) span=$(( RATE * secs ))
+        local filled=$(( done_n * 24 / span )) bar= i=0
+        [ "$filled" -lt 0 ] && filled=0
+        while [ $i -lt 24 ]; do
+            [ $i -lt $filled ] && bar="$bar#" || bar="$bar."
+            i=$(( i + 1 ))
+        done
+        if [ "$style" = move ]; then
+            printf '\r\033[2K  %s%s%s  [%s]' "$yellow$bold" "$headline" "$off" "$bar"
+        else
+            printf '\r\033[2K  %s%s%s  [%s]  %ds' "$bold" "$headline" "$off" "$bar" \
+                $(( (target - r + RATE - 1) / RATE ))
+        fi
+        sleep 0.2
+    done
+
+    PHASE_START=$(( begin + 1 ))
+    PHASE_END=$(rows_now)
+    printf '\r\033[2K  %s%s%s  done\n' "$dim" "$headline" "$off"
+}
+
+# Angle between two gravity vectors, in degrees.
+vec_angle() {
+    awk -v ax=$1 -v ay=$2 -v az=$3 -v bx=$4 -v by=$5 -v bz=$6 'BEGIN{
+        d = ax*bx + ay*by + az*bz
+        m = sqrt(ax*ax+ay*ay+az*az) * sqrt(bx*bx+by*by+bz*bz)
+        if (m == 0) { print "0"; exit }
+        c = d/m; if (c > 1) c = 1; if (c < -1) c = -1
+        printf "%.1f", atan2(sqrt(1-c*c), c) * 57.29577951
+    }'
+}
+
+# A pose held in the hand can't meet the thresholds a sensor lying on a table
+# can, and judging it by those would reject every valid capture. What actually
+# corrupts a 5 s gravity average is sustained drift, not a momentary twitch, so
+# these gate the gyro *mean* where StaticCheck gates the peak. Same quantity,
+# different physical situation, stated rather than fudged.
+HELD_WARN_DPS=5
+HELD_FAIL_DPS=12
+
+calibrate_once() {
+    mkdir -p "$CALIB"
+    local stamp; stamp=$(date '+%Y-%m-%d_%H-%M-%S')
+
+    SEQ_FILE="$CALIB/$stamp-sequence.csv"
+
+    head1 "Mount calibration — one continuous capture, about 30 seconds"
+    cat <<EOF
+
+  ${dim}Three held positions with the swings between them. The script counts the
+  time and tells you when to move — you never have to watch a clock.${off}
+
+    1  rod down at your side, arm hanging      hold 5 s
+    2  swing up                                the swing is measured too
+    3  arm straight up, rod tip at the sky     hold 5 s
+    4  bring the rod down to point forward
+    5  arm out, rod pointing straight ahead    hold 5 s
+EOF
+
+    # Connect first and prove data is flowing before any of the timed steps
+    # start, so a slow BLE connect can never eat into a hold window.
+    head1 "Step 0 — connection check"
+    trap '' INT
+    "$COLLECT" -o "$SEQ_FILE" --despike --rate "$RATE" --seconds 300 --no-tags \
+        >/dev/null 2>&1 &
+    SEQ_PID=$!
+
+    local ticks=0 r=0
+    while kill -0 "$SEQ_PID" 2>/dev/null; do
+        r=$(rows_now)
+        [ "$r" -gt $(( RATE / 2 )) ] && break
+        printf '\r\033[2K  %sConnecting to the sensor…%s' "$dim" "$off"
+        ticks=$(( ticks + 1 ))
+        if [ "$ticks" -gt 150 ]; then break; fi
+        sleep 0.2
+    done
+    printf '\r\033[2K'
+
+    if [ "$(rows_now)" -le $(( RATE / 2 )) ]; then
+        kill -TERM "$SEQ_PID" 2>/dev/null; wait "$SEQ_PID" 2>/dev/null
+        trap - INT; stty sane 2>/dev/null
+        warn "  Never connected. Check the sensor is on and charged, and that"
+        warn "  Bluetooth is allowed for this terminal in System Settings."
+        rm -f "$SEQ_FILE"
+        return 1
+    fi
+
+    # Prove it is reading sensibly, not merely connected.
+    set -- $(pose_stats "$SEQ_FILE")
+    say "  ${green}Connected${off} — ${dim}$1 samples so far, reading $5 g${off}"
+    if awk "BEGIN{exit !(($5 - 1.0) ^ 2 > $GRAV_FAIL_G ^ 2)}"; then
+        kill -TERM "$SEQ_PID" 2>/dev/null; wait "$SEQ_PID" 2>/dev/null
+        trap - INT; stty sane 2>/dev/null
+        warn "  But it reads $5 g, not 1.000. Run cast check before going further."
+        rm -f "$SEQ_FILE"
+        return 1
+    fi
+
+    say ""
+    say "  ${dim}Read this out:${off}"
+    say "    \"Hold the rod down at your side, arm hanging straight"
+    say "     down, rod lined up along your arm. Stay still until I"
+    say "     tell you to swing.\""
+    say ""
+    printf '  %sPress Enter when they are in position and still →%s ' "$bold" "$off"
+    read -r _
+    say ""
+
+    phase "1  HOLD — rod down at your side" 5
+    local a1=$PHASE_START a2=$PHASE_END
+
+    phase "2  SWING UP — one smooth movement" 3 move
+
+    phase "3  HOLD — arm straight up, tip at the sky" 5
+    local b1=$PHASE_START b2=$PHASE_END
+
+    phase "4  BRING IT DOWN TO POINT FORWARD" 3 move
+
+    phase "5  HOLD — arm out, rod straight ahead" 5
+    local c1=$PHASE_START c2=$PHASE_END
+
+    kill -TERM "$SEQ_PID" 2>/dev/null
+    wait "$SEQ_PID" 2>/dev/null
+    trap - INT
+    stty sane 2>/dev/null
+
+    say ""
+    say "  ${green}${bold}DONE — you can relax.${off}"
+
+    # ---- the three still windows, pulled out of the one recording ----
+    local verdict=ok
+    local names="down up forward"
+    local dx dy dz ux uy uz cx cy cz
+    local i=0 label
+    for label in down up forward; do
+        case $label in
+        down)    set -- $(pose_stats "$SEQ_FILE" "$a1" "$a2") ;;
+        up)      set -- $(pose_stats "$SEQ_FILE" "$b1" "$b2") ;;
+        forward) set -- $(pose_stats "$SEQ_FILE" "$c1" "$c2") ;;
+        esac
+        POSE_N=$1; POSE_X=$2; POSE_Y=$3; POSE_Z=$4; POSE_MAG=$5; POSE_GMEAN=$6
+
+        say ""
+        say "  ${bold}$label${off}  ${dim}$POSE_N samples · gravity X $POSE_X Y $POSE_Y Z $POSE_Z · drift $POSE_GMEAN °/s${off}"
+
+        if [ "$POSE_N" -lt $(( RATE * 3 )) ]; then
+            warn "    too short — only $POSE_N samples, under 3 s"
+            verdict=fail
+        elif awk "BEGIN{exit !($POSE_GMEAN > $HELD_FAIL_DPS)}"; then
+            warn "    moved too much during the hold ($POSE_GMEAN °/s)"
+            verdict=fail
+        elif awk "BEGIN{exit !($POSE_GMEAN > $HELD_WARN_DPS)}"; then
+            warn "    some drift ($POSE_GMEAN °/s) — usable, steadier is better"
+        fi
+
+        case $label in
+        down)    dx=$POSE_X; dy=$POSE_Y; dz=$POSE_Z ;;
+        up)      ux=$POSE_X; uy=$POSE_Y; uz=$POSE_Z ;;
+        forward) cx=$POSE_X; cy=$POSE_Y; cz=$POSE_Z ;;
+        esac
+    done
+
+    # Geometry checks. Down and up point the rod along the same line in opposite
+    # senses, so their gravity vectors should come back ~180° apart — that pair
+    # is a consistency check, NOT a source of mount information, because two
+    # antiparallel vectors constrain no more than one does. The forward hold is
+    # the one that carries the clocking, being the only pose with gravity across
+    # the rod rather than along it. See CALIBRATION.md §2.
+    local a_du a_df a_uf
+    a_du=$(vec_angle $dx $dy $dz $ux $uy $uz)
+    a_df=$(vec_angle $dx $dy $dz $cx $cy $cz)
+    a_uf=$(vec_angle $ux $uy $uz $cx $cy $cz)
+
+    head1 "Geometry"
+    say "  down → up        $a_du°   ${dim}expect ~180° (consistency check)${off}"
+    say "  down → forward   $a_df°   ${dim}expect ~90°${off}"
+    say "  up → forward     $a_uf°   ${dim}expect ~90°  ← this is the one that matters${off}"
+
+    if awk "BEGIN{exit !($a_du < 150)}"; then
+        verdict=fail
+        warn ""
+        warn "  FAIL — down and up came back only $a_du° apart, expected ~180°."
+        warn "  The rod wasn't lined up along the arm in one of them, or the arm"
+        warn "  didn't finish straight up."
+    fi
+    if awk "BEGIN{exit !($a_uf < 60 || $a_uf > 120)}"; then
+        verdict=fail
+        warn ""
+        warn "  FAIL — the forward hold is $a_uf° from the arm-up hold, expected ~90°."
+        warn "  Point the rod level and straight ahead, arm still out. This is the"
+        warn "  pose that fixes how the housing is rotated on the blank, so a sloppy"
+        warn "  one costs the whole calibration."
+    fi
+
+    cat > "$CALIB/$stamp.json" <<EOF
+{
+  "captured": "$stamp",
+  "verdict": "$verdict",
+  "sequenceCsv": "$(basename "$SEQ_FILE")",
+  "holds": {
+    "down":    { "rows": [$a1, $a2], "meanAcc": [$dx, $dy, $dz] },
+    "up":      { "rows": [$b1, $b2], "meanAcc": [$ux, $uy, $uz] },
+    "forward": { "rows": [$c1, $c2], "meanAcc": [$cx, $cy, $cz] }
+  },
+  "swings": { "upSwingRows": [$a2, $b1], "forwardRows": [$b2, $c1] },
+  "anglesDeg": { "downToUp": $a_du, "downToForward": $a_df, "upToForward": $a_uf },
+  "solved": false,
+  "note": "Hold vectors and swing spans only. The TRIAD solve is not implemented — see CALIBRATION.md §2. down/up are antiparallel and cannot fix clocking; forward is the informative pose."
+}
+EOF
+
+    if [ "$verdict" = fail ]; then
+        warn ""
+        warn "  Calibration not saved as current. Run cast calibrate again."
+        return 1
+    fi
+
+    ln -sf "$stamp.json" "$CALIB/current.json"
+    head1 "Done"
+    say "  ${green}$CALIB/$stamp.json${off}"
+    say "  ${dim}whole sequence kept as $(basename "$SEQ_FILE") — the swings are in there too${off}"
+    say ""
+    say "  Now record:  ${bold}cast <person> <test>${off}"
+    return 0
+}
+
+# A hold can only be retried by redoing the sequence — it is one continuous
+# recording, so there is no way to splice a replacement window into the middle.
+run_calibrate() {
+    while true; do
+        calibrate_once && return 0
+        say ""
+        printf '  %s[Enter]%s run it again   %s[q]%s give up  > ' \
+            "$bold" "$off" "$bold" "$off"
+        # A failed `read` means EOF — piped input or Ctrl-D. Without this the
+        # loop would spin forever on an empty answer it can never satisfy.
+        read -r answer || return 1
+        case "$answer" in
+        q|Q) return 1 ;;
+        esac
+    done
+}
+
+run_profile() {
+    local person; person=$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')
+    [ -n "$person" ] || die "which person? e.g. cast profile dad"
+    case "$person" in
+    *[!a-z0-9]*) die "person must be lowercase letters and digits only — got '$person'" ;;
+    esac
+
+    mkdir -p "$CALIB"
+    local prof="$CALIB/profile-$person.json"
+    local sweep="$CALIB/profile-$person-sweep.csv"
+
+    head1 "Profile — $person"
+    say "${dim}Once per person, not per session. These normalise across bodies; they do${off}"
+    say "${dim}not correct the sensor. See CALIBRATION.md §3.${off}"
+
+    say ""
+    printf 'Height (e.g. 5ft10 or 178cm), Enter to skip: '
+    read -r height
+    printf 'Casting experience (beginner / occasional / experienced): '
+    read -r experience
+    printf 'Rod (make, length, weight, action if known): '
+    read -r rod
+
+    say ""
+    say "${bold}Shoulder sweep${off} — optional, Enter at the prompt to skip."
+    # Retry is offered even when the capture passed its gates. Stillness is all
+    # the software can see; whether they used the elbow, leaned the trunk, or
+    # stopped short of shoulder height is visible only to the person watching.
+    while true; do
+        local swept=1
+        capture_pose "SHOULDER SWEEP" "$sweep" \
+"    \"Let your casting arm hang straight down at your side,
+     with the rod lined up along your arm. When I say go,
+     raise the rod straight out in front of you to shoulder
+     height — one smooth movement, pivoting at the shoulder
+     only — then hold it there until I say done.\"
+
+  ${dim}Keep the elbow out of it and don't let the trunk lean in — either one${off}
+  ${dim}is a second pivot, and it corrupts the number this is measuring.${off}" \
+"Press Enter, then say go and let them sweep." || swept=0
+
+        say ""
+        if [ "$swept" -eq 1 ]; then
+            printf '  %s[Enter]%s keep it   %s[r]%s do it again   %s[s]%s skip the sweep  > ' \
+                "$bold" "$off" "$bold" "$off" "$bold" "$off"
+        else
+            printf '  %s[Enter]%s try again   %s[s]%s skip the sweep  > ' \
+                "$bold" "$off" "$bold" "$off"
+        fi
+        read -r answer || break
+
+        case "$answer" in
+        r|R) rm -f "$sweep"; continue ;;
+        s|S) rm -f "$sweep"; warn "  Sweep skipped — the rest of the profile is still saved."; break ;;
+        *)
+            if [ "$swept" -eq 1 ]; then break; fi
+            rm -f "$sweep"
+            ;;
+        esac
+    done
+
+    cat > "$prof" <<EOF
+{
+  "person": "$person",
+  "updated": "$(date '+%Y-%m-%d')",
+  "height": "$height",
+  "castingExperience": "$experience",
+  "rod": "$rod",
+  "shoulderToSensorSweepCsv": $([ -s "$sweep" ] && printf '"%s"' "$(basename "$sweep")" || printf 'null'),
+  "note": "Inputs only. Anthropometric height derivation is deliberately not computed — see CALIBRATION.md §3 and §5.2."
+}
+EOF
+
+    head1 "Done"
+    say "  ${green}$prof${off}"
+    [ -s "$sweep" ] && say "  ${dim}sweep recorded — fit the radius by loading it in the browser analyser${off}"
+    return 0
+}
+
+# ---------------------------------------------------------------- protocol cards
+
+protocol_for() {
+    case "$1" in
+    updown) cat <<'EOF'
+  1  Rod horizontal, pointing forward. Hold COMPLETELY STILL 5 s.
+  2  Block A — 10 slow cycles. Up, pause ~1 s, down, pause ~1 s. Always start UP.
+     Count them out loud.
+  3  Hold COMPLETELY STILL 5 s.
+  4  Block B — 10 fast cycles. Same motion, brisk, NO pause at either end.
+  5  Hold COMPLETELY STILL 5 s.
+
+  Stay in one vertical plane — the value of this recording is that it is single-axis.
+  Expect 40 strokes, signs strictly alternating. Anything else is a finding.
+EOF
+        ;;
+    noline) cat <<'EOF'
+  1  Hold COMPLETELY STILL 5 s
+  2  Lift the rod back (pickup)
+  3  3–5 false casts
+  4  Final forward stroke — press 4
+  5  Hold COMPLETELY STILL 5 s
+  6  Repeat from 2, three or four times
+  7  Then ONE sequence that just stops — false cast, then quit, no final stroke.
+     Don't tag it.
+
+  The still periods matter as much as the casting: they mark burst boundaries.
+EOF
+        ;;
+    20ft) cat <<'EOF'
+  Same structure as noline, with real deliveries — let the line shoot and land.
+
+  1  Hold COMPLETELY STILL 5 s
+  2  Pickup, 3–5 false casts, delivery — press 4
+  3  Let the line land, then hold STILL 5 s   (that's the follow-through window)
+  4  Repeat three or four times
+  5  Include one deliberate non-delivery stop, untagged
+EOF
+        ;;
+    fish) cat <<'EOF'
+  Fish the way you actually would. Start ~15 ft, work line out as you go.
+  Press 4 on each delivery, nothing else.
+
+  Afterwards note the rough start and end line length — burst order then becomes
+  a proxy for line length.
+EOF
+        ;;
+    falsecast) cat <<'EOF'
+  Counted forward false casts — 10 is the usual set. Pickup, then false cast,
+  then stop. No delivery, no tagging.
+
+  Expect 21 strokes: 10 forward, 10 back, plus the pickup.
+EOF
+        ;;
+    tagged) cat <<'EOF'
+  TWO PEOPLE. One casts, one tags every stroke as it finishes:
+
+      1 pickup     2 false back     3 false forward     4 delivery
+
+  The tagger watches the caster, not the screen. Late presses are fine and
+  corrected for. One good 2–3 minute session beats several sloppy ones — this is
+  the validation set for the whole classifier and it cannot be done alone.
+EOF
+        ;;
+    esac
+}
+
+# ---------------------------------------------------------------- subcommands
+
+case "${1:-}" in
+-h|--help|help|"") usage; exit 0 ;;
+protocol)
+    # Short by default and printed straight to the screen: a card you have to
+    # page through is a card you can't read while holding a rod. The long form
+    # is one word away.
+    case "${2:-}" in
+    full|-a|--all)
+        if [ -t 1 ] && command -v less >/dev/null 2>&1; then
+            less -R PROTOCOL.md
+        else
+            cat PROTOCOL.md
+        fi
+        ;;
+    *)
+        cat <<EOF
+
+${bold}CASTR — QUICK CARD${off}
+
+  1  cast profile <person>    once per person, ever
+  2  cast calibrate           start of session, and after any remount
+  3  cast <person> <test>     each recording
+
+${bold}MOUNT${off}  above the cork handle — ${bold}same spot, same rotation, every time.${off}
+       Nothing in the software can check this for you.
+
+${bold}CALIBRATE${off}  one 30 s sequence, all held in the hand. It checks the
+           connection first, then counts you through. Just follow the screen.
+  1  rod down at your side, arm hanging      hold 5 s
+  2  swing up                                 (the swing is measured too)
+  3  arm straight up, rod tip at the sky     hold 5 s
+  4  bring it down to point forward
+  5  arm out, rod straight ahead and level   hold 5 s
+
+${bold}RECORD${off}  cast dad 20ft
+  tests   updown | noline | 20ft | fish | falsecast | tagged
+          new person → ${bold}updown first${off}
+
+  prompts you'll hit
+    still and untouched…    sensor flat on a table, hands off, Enter (15 s)
+    [c] calibrate now       c
+    Press Enter to start    Enter, cast, then ${bold}Ctrl-C when done${off}
+    >                       one-line note (rod, wind, anything odd), or Enter
+
+  while casting
+    ${bold}1${off} pickup   ${bold}2${off} false back   ${bold}3${off} false forward   ${bold}4${off} delivery
+    press as each stroke finishes — late is fine
+    watch that ${bold}rejected stays 0${off}
+
+${dim}  cast protocol full    everything, including what each failure means${off}
+${dim}                        (that one opens a pager — press q to leave it)${off}
+
+EOF
+        ;;
+    esac
+    exit 0
+    ;;
+check)     ensure_built; run_check; exit $? ;;
+calibrate) ensure_built; run_calibrate; exit $? ;;
+profile)   ensure_built; run_profile "${2:-}"; exit $? ;;
+list)
+    head1 "Recorded sessions"
+    ls -lh ./*.csv 2>/dev/null | grep -v '\.events\.csv' \
+        | awk '{printf "  %-28s %8s  %s %s\n", $9, $5, $6, $7}' \
+        || say "  none yet"
+    exit 0
+    ;;
+esac
+
+# ---------------------------------------------------------------- arguments
+
+PERSON=$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')
+TEST=$(printf '%s' "${2:-}" | tr '[:upper:]' '[:lower:]')
+
+[ -n "$TEST" ] || { usage; die "need both a person and a test"; }
+
+case "$PERSON" in
+*[!a-z0-9]*) die "person must be lowercase letters and digits only — got '$PERSON'" ;;
+esac
+
+case "$TEST" in
+updown|noline|20ft|fish|falsecast|tagged) ;;
+*) usage; die "unknown test '$TEST'" ;;
+esac
+
+# CAPTURE.md: the four casting labels don't apply to a counted reference motion,
+# so those two record with tagging off.
+TAGS=on
+case "$TEST" in
+updown|falsecast) TAGS=off ;;
+esac
+
+# Never overwrite. A recording cannot be reproduced, so a second attempt gets a
+# suffix rather than the benefit of the doubt.
+NAME="$PERSON-$TEST"
+if [ -e "$NAME.csv" ]; then
+    n=2
+    while [ -e "$NAME-$n.csv" ]; do n=$((n + 1)); done
+    warn "$NAME.csv already exists — recording as $NAME-$n.csv instead."
+    NAME="$NAME-$n"
+fi
+CSV="$NAME.csv"
+
+# ---------------------------------------------------------------- run
+
+ensure_built
+
+head1 "Session: $PERSON — $TEST  →  $CSV"
+
+cat <<EOF
+Mount the sensor on the rod immediately above the cork handle, in the SAME spot
+and the SAME rotational orientation as every other session. Same face up.
+EOF
+
+run_check || exit 1
+
+# Mount poses are per-session and per-remount. Today's are the ones that describe
+# today's mount, so anything older is treated as absent rather than as good enough.
+# current.json is only repointed on a passing calibration, so testing it — rather
+# than "is there a file from today" — is what stops a failed pose pair from
+# satisfying the gate.
+if [ -e "$CALIB/current.json" ] \
+   && case "$(readlink "$CALIB/current.json")" in "$(date '+%Y-%m-%d')"_*) true ;; *) false ;; esac; then
+    say ""
+    say "${dim}Mount poses captured today — ok.${off}"
+else
+    warn ""
+    warn "No mount calibration from today."
+    warn "The poses take ten seconds and are the only thing that lets this session be"
+    warn "re-referenced once the solver lands (CALIBRATION.md §2)."
+    say ""
+    printf '%s[c]%s calibrate now   %s[s]%s skip and record anyway   %s[q]%s quit  > ' \
+        "$bold" "$off" "$bold" "$off" "$bold" "$off"
+    read -r answer
+    case "$answer" in
+    c|C|"") run_calibrate || die "calibration failed — fix it, or re-run and skip with [s]" ;;
+    s|S)    warn "Skipping. This session will not be re-referenceable." ;;
+    *)      die "stopped" ;;
+    esac
+fi
+
+head1 "What to do"
+protocol_for "$TEST"
+
+if [ "$TAGS" = on ]; then
+    say ""
+    say "  ${bold}Tag as each stroke finishes:${off}  1 pickup   2 false back   3 false forward   4 delivery"
+    say "  ${dim}Don't press anything until it says it's recording.${off}"
+fi
+
+say ""
+say "${bold}Press Enter to start recording. Ctrl-C when the session is done.${off}"
+read -r _
+
+TAGFLAG=""
+[ "$TAGS" = off ] && TAGFLAG="--no-tags"
+
+# Ctrl-C reaches the whole foreground process group, so without this the script
+# would die alongside the collector and skip the analysis and backup below.
+# castr-collect ignores SIGINT itself and shuts down through a dispatch source,
+# so inheriting the ignore costs it nothing.
+trap '' INT
+"$COLLECT" -o "$CSV" --despike --rate "$RATE" $TAGFLAG
+trap - INT
+
+# A recorder that died badly leaves the terminal without echo.
+stty sane 2>/dev/null
+
+# ---------------------------------------------------------------- verify
+
+if [ ! -s "$CSV" ]; then
+    die "No file was written. The sensor never connected — check it's on and charged."
+fi
+
+rows=$(($(wc -l < "$CSV") - 1))
+if [ "$rows" -lt 200 ]; then
+    warn ""
+    warn "Only $rows samples ($CSV). That's under a second of data — something went"
+    warn "wrong. Keep the file, but don't count this as a session."
+    exit 1
+fi
+
+# ---------------------------------------------------------------- analyse
+
+head1 "Analysis"
+"$ANALYZE" "$CSV"
+
+# ---------------------------------------------------------------- notes
+
+head1 "Notes"
+say "${dim}Rod, casting experience, wind, anything odd. None of this is in the CSV${off}"
+say "${dim}and none of it can be recovered later. Enter to skip.${off}"
+printf '> '
+read -r note
+if [ -n "$note" ]; then
+    printf '%s  %-24s %s\n' "$(date '+%Y-%m-%d %H:%M')" "$CSV" "$note" >> sessions.log
+    say "${dim}Saved to sessions.log${off}"
+fi
+
+# ---------------------------------------------------------------- backup
+
+mkdir -p "$BACKUP"
+cp "$CSV" "$BACKUP/" 2>/dev/null
+[ -e "$NAME.events.csv" ] && cp "$NAME.events.csv" "$BACKUP/"
+
+head1 "Done"
+say "  ${green}$CSV${off}  ($rows samples)"
+[ -e "$NAME.events.csv" ] && say "  ${green}$NAME.events.csv${off}  (stroke tags)"
+say "  ${dim}backed up to $BACKUP${off}"
+say ""
+say "  Next: ${bold}cast $PERSON <test>${off}   or   ${bold}cast list${off}"
