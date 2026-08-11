@@ -11,43 +11,45 @@ buildable. Check the sensor is charged before starting a multi-person session.
 ## The whole thing, one command
 
 ```sh
-cd ~/Desktop/Castr
-./cast dad 20ft
+cast dad 20ft
 ```
 
 That builds if needed, picks the filename, runs the health check and refuses to go on
-if it fails, prints the protocol for that test, records, analyses the result, takes a
-one-line note, and copies both files to the backup. Ctrl-C ends the recording.
+if it fails, prints the protocol for that test, waits until the sensor is actually
+streaming and then says **GO**, records, analyses the result, takes a one-line note,
+and copies both files to the backup. Ctrl-C ends the recording.
 
 ```sh
-./cast <person> <test>     updown | noline | 20ft | fish | falsecast | tagged
-./cast calibrate           mount poses — start of session, and after any remount
-./cast profile <person>    per-person reference measurements — once, not per session
-./cast check               health check on its own
-./cast list                what has been recorded so far
+cast <person> <test>     updown | noline | 20ft | fish | falsecast | tagged
+cast calibrate           mount sequence — start of session, and after any remount
+cast profile <person>    per-person reference measurements — once, not per session
+cast check               health check on its own
+cast list                what has been recorded so far
+cast protocol            the field card
 ```
 
-**Before the first recording of a session, run `./cast calibrate`** — two five-second
-still poses that pin down how the housing sits on the blank. `./cast` prompts for it if
-today's poses are missing. `CALIBRATION.md` is the protocol and explains why the poses are
-worth capturing before the solver that consumes them exists.
+**Before the first recording of a session, run `cast calibrate`** — one continuous 30 s
+capture of three held positions with the swings between them. `cast` prompts for it if
+today's sequence is missing. `CALIBRATION.md` is the protocol and explains why it is worth
+capturing before the solver that consumes it exists.
 
 **Order for a new person:** `updown` first — it is the reference motion that fixes which
 axis is the casting axis — then `noline`, `20ft`, `fish`.
 
 ```sh
-./cast nate updown
-./cast nate noline
-./cast nate 20ft
-./cast nate fish
+cast nate updown
+cast nate noline
+cast nate 20ft
+cast nate fish
 ```
 
 Two things it will not do for you. It cannot see the sensor, so **mounting it in the same
 spot and the same rotational orientation every time is still on you**. And it will not
-overwrite a recording: a second `./cast dad 20ft` becomes `dad-20ft-2.csv` and says so.
+overwrite a recording: a second `cast dad 20ft` becomes `dad-20ft-2.csv` and says so.
 
-Notes go to `sessions.log`, which is the one place casting experience and rod details get
-recorded — `PLAN.md` §6 lists their absence as a live gap in the corpus.
+Recordings land in `Sessions/`. Notes go to `Sessions/sessions.log`, which is the one place
+casting experience and rod details get recorded — `PLAN.md` §6 lists their absence as a
+live gap in the corpus.
 
 The rest of this document is why each step exists. The script is it made executable; read
 on when something looks wrong, not before every session.
@@ -56,7 +58,7 @@ on when something looks wrong, not before every session.
 
 ## Naming
 
-`<person>-<test>.csv`, lowercase, no spaces. The sidecar follows automatically.
+`Sessions/<person>-<test>.csv`, lowercase, no spaces. The sidecar follows automatically.
 
 ```
 dad-noline.csv       dad-20ft.csv       dad-fish.csv       dad-tagged.csv
@@ -91,7 +93,7 @@ looks fine and isn't.
 **3. Record:**
 
 ```sh
-./.build/debug/castr-collect -o dad-20ft.csv --despike --rate 200
+./.build/debug/castr-collect -o Sessions/dad-20ft.csv --despike --rate 200
 ```
 
 Ctrl-C to stop. Watch `rejected` stays at 0.
@@ -121,7 +123,7 @@ of this recording is that it's single-axis.
 Run it with tagging off — the four casting labels don't apply here:
 
 ```sh
-./.build/debug/castr-collect -o nate-updown.csv --despike --rate 200 --no-tags
+./.build/debug/castr-collect -o Sessions/nate-updown.csv --despike --rate 200 --no-tags
 ```
 
 **Expected: 40 strokes**, 20 per block, signs strictly alternating, starting with
@@ -232,12 +234,12 @@ with timestamps that precede the first sample and are currently kept silently
 ## After
 
 ```sh
-swift run castr-analyze dad-20ft.csv
+swift run castr-analyze Sessions/dad-20ft.csv
 ```
 
 Then copy the new recordings to the backup — they are gitignored and the project
 folder is their only home:
 
 ```sh
-cp ~/Desktop/Castr/*.csv ~/Documents/castr-sessions/
+cp ~/Desktop/Castr/Sessions/*.csv ~/Documents/castr-sessions/
 ```

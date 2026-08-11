@@ -36,14 +36,27 @@ data, but only if it can be told apart from a sensor fault. Its absence is curre
 named gap in the corpus — Sam's arcs run 24% wider than everyone else's and there is no
 way to tell practice from inexperience.
 
-Then the **shoulder sweep** (optional — Enter past it if you're in a hurry):
+Then the **shoulder sweep** (optional — press `s` at the prompt to skip). It runs as three
+timed steps, same as `cast calibrate`: the screen tells them when to move and when to stop.
 
-> Casting arm hanging straight down at your side, rod aligned with your arm. Raise the rod
-> straight out in front to shoulder height — one clean ~90° sweep **from the shoulder
-> only** — then hold still.
+> "Let your casting arm hang straight down at your side, with the rod lined up along your
+> arm. Hold it there. When I say raise, bring the rod straight out in front of you to
+> shoulder height — one smooth movement, pivoting at the shoulder only — and hold it there.
+> I'll tell you when to move and when to stop."
 
-Press Enter *first*, then do the sweep, then hold. It records for 5 s. Don't let your
-trunk lean in; that's a second uncontrolled pivot and it corrupts the number.
+| | | |
+|---|---|---|
+| 1 | arm down at your side | hold 4 s |
+| 2 | **raise** out in front to shoulder height | 4 s — this is the measurement |
+| 3 | arm out at shoulder height | hold 4 s |
+
+Step 2 is the part being measured; the two holds bracket it and give the gravity reference
+at each end. Keep the elbow out of it and don't let the trunk lean in — either one is a
+second pivot and corrupts the number.
+
+Afterwards you get `[Enter] keep it  [r] do it again  [s] skip`. Redo it freely: stillness
+is all the software can check, and whether they bent the elbow or stopped short of shoulder
+height is visible only to you.
 
 Writes `calibration/profile-<person>.json`.
 
@@ -110,9 +123,9 @@ New person, in order: `updown` → `noline` → `20ft` → `fish`.
 
 | prompt | what to put in |
 |---|---|
-| `Press Enter when it is still and untouched…` | put the sensor **flat on a hard surface, hands off**, then Enter. 15 s. |
+| `Press Enter when it is still and untouched…` | put the sensor **flat on a hard surface, hands off**, then Enter. 5 s. |
 | `[c] calibrate now [s] skip and record anyway [q] quit` | `c` (or just Enter). Only use `s` if you calibrated and it's after midnight. |
-| `Press Enter to start recording` | Enter, then cast. **Ctrl-C when the session is done.** |
+| `Press Enter to connect` | Enter, then **wait for `▶ GO — START CASTING`** before you move. It has to scan and connect first, and anything you do before GO isn't in the file. **Ctrl-C when the session is done.** |
 | `>` (notes) | rod, wind, anything odd — one line. Enter to skip. Goes to `sessions.log`. |
 
 ### While recording
@@ -163,11 +176,11 @@ through.
 ## Where things land
 
 ```
-<person>-<test>.csv            the recording      (gitignored, backed up)
-<person>-<test>.events.csv     stroke tags        (only if any were pressed)
-calibration/<stamp>.json       mount poses
-calibration/profile-<p>.json   per-person profile
-sessions.log                   your typed notes
+Sessions/<person>-<test>.csv         the recording   (gitignored, backed up)
+Sessions/<person>-<test>.events.csv  stroke tags     (only if any were pressed)
+Sessions/sessions.log                your typed notes
+calibration/<stamp>.json             mount poses
+calibration/profile-<p>.json         per-person profile
 ```
 
 Backup copy goes to `~/Documents/castr-sessions/` automatically.

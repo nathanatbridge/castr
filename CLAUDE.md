@@ -85,6 +85,6 @@ Prose in the README and CLI help is plain and direct — no marketing register.
 
 ## Data
 
-Session CSVs live in the repo root. `PLAN.md` has the full corpus table with what
+Session CSVs live in `Sessions/`. `PLAN.md` has the full corpus table with what
 each session is and what it's good for. `cast1.csv` and `test1.csv` have all-zero
 gyro columns and are useless for anything motion-related.

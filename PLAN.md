@@ -254,7 +254,7 @@ back/forward label, it hid the fact that two strokes had been recorded as one.
 
 ## 6. Test corpus
 
-Session CSVs are in the repo root. Sidecars are `<name>.events.csv`.
+Session CSVs are in `Sessions/`. Sidecars are `<name>.events.csv` alongside them.
 
 Stroke and cast counts are **post-fix** (§5); the figures in brackets are what the same
 sessions read before reversal splitting, kept because most of the earlier analysis in
