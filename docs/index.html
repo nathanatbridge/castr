@@ -98,6 +98,23 @@
   .verdict{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap}
   .verdict .big{font-size:30px;font-weight:600;letter-spacing:-.02em}
   .verdict .word{font-size:15px;color:var(--ink-2)}
+  .verdict .sub{color:var(--muted);font-size:13px}
+
+  /* clickable metric names, and the definition each one opens */
+  button.metric{background:none;border:0;padding:0;color:inherit;font:inherit;
+    text-align:left;border-bottom:1px dotted var(--axis)}
+  button.metric:hover{color:var(--s1);border-bottom-color:var(--s1)}
+  button.metric[aria-expanded=true]{color:var(--s1);border-bottom-style:solid;
+    border-bottom-color:var(--s1)}
+  button.metric::after{content:"?";font-size:9px;vertical-align:super;
+    color:var(--muted);margin-left:3px}
+  button.metric[aria-expanded=true]::after{content:"×";vertical-align:baseline;
+    font-size:11px;color:var(--s1)}
+  tbody tr.defrow:hover{background:none}
+  tr.defrow td{white-space:normal;text-align:left;font-family:inherit;font-size:13px;
+    line-height:1.5;color:var(--ink-2);background:var(--band);padding:10px 14px 12px}
+  tr.defrow .why{display:block;margin-top:6px}
+  tr.defrow .why b{color:var(--ink);font-weight:600}
   .note{margin:0;color:var(--ink-2);font-size:13.5px;max-width:76ch}
   section{display:flex;flex-direction:column;gap:12px}
   .hidden{display:none !important}
@@ -313,20 +330,21 @@
 
     <section id="consistency-section">
       <h2>Consistency</h2>
-      <div class="verdict">
-        <span class="big mono" id="repcv"></span>
-        <span class="word" id="repword"></span>
-      </div>
+      <div class="verdict" id="verdict"></div>
       <p class="note">
-        Mean spread across arc, duration, peak rate and stop deceleration — lower is more
-        alike. Planarity and peak acceleration are excluded: they track the mount and
-        geometry more than technique.
+        The headline is 100% minus the stroke-to-stroke spread across arc, duration, peak
+        rate and stop deceleration, so higher means your strokes repeat each other more
+        closely. Planarity and peak acceleration are excluded: they track the mount and
+        geometry more than technique. This is repeatability, not accuracy — the sensor has
+        no target to measure you against, so a session can be 95% consistent and
+        consistently wrong.
       </p>
       <div class="tablewrap">
         <table>
+          <caption>Click a metric to read what it measures and why it matters.</caption>
           <thead><tr>
             <th scope="col">Metric</th><th scope="col">Mean</th><th scope="col">SD</th>
-            <th scope="col">CV</th><th scope="col">Min</th><th scope="col">Max</th>
+            <th scope="col">Consistent</th><th scope="col">Min</th><th scope="col">Max</th>
             <th scope="col">Outliers</th>
           </tr></thead>
           <tbody id="spreads"></tbody>
@@ -377,6 +395,12 @@
         The two views within a session share one scale, but scale is fitted per session, so
         compare shape and spread here and read absolute sizes off the tables.
       </p>
+      <div class="swingctl" id="cmp-ctl">
+        <button class="ghost" id="cmp-play" aria-label="Play every column together">Play all</button>
+        <span class="clock" id="cmp-clock">0.00 s</span>
+        <span class="ctl-k">every column starts at once · shorter bursts finish first
+          and hold</span>
+      </div>
       <div class="cmpgrid" id="cmp-grid"></div>
       <div class="legend">
         <span><i style="background:var(--s1)"></i>Stroke one way</span>
@@ -386,8 +410,9 @@
         <span><i style="background:var(--axis)"></i>Arm</span>
       </div>
       <p class="note">
-        Grid squares are 10&nbsp;cm. Consistency is the spread across each session's own
-        strokes — a session can be tight and still differ from the one beside it.
+        Grid squares are 10&nbsp;cm. Consistency is measured within each session, across
+        its own strokes, so a session can score high here and still differ from the one
+        beside it. Click any metric name to read what it measures.
       </p>
     </section>
 
@@ -573,6 +598,7 @@
       return;
     }
 
+    stopCompare();
     $("single-view").classList.remove("hidden");
     $("cmp-section").classList.add("hidden");
     $("compare-section").classList.add("hidden");
@@ -624,29 +650,141 @@
     sec.classList.remove("hidden");
 
     $("spreads").innerHTML = spreadRows(p, true);
+    $("verdict").innerHTML = verdictHtml(A.repeatabilityCV(p.strokes));
+  }
 
-    var cv = A.repeatabilityCV(p.strokes);
-    if (cv === null) {
-      $("repcv").textContent = "—";
-      $("repword").textContent = "three or more strokes needed";
-    } else {
-      $("repcv").textContent = f(cv, 1) + "%";
-      $("repword").textContent = A.verdict(cv);
+  /* What each metric measures, and what it is for. Kept here rather than in
+     analysis.js: that file is the port of the Swift analysis and is held to it
+     by verify-web-parity, so prose about the numbers doesn't belong in it. */
+  var METRIC_DEFS = {
+    "Arc swept": {
+      what: "How far the handle turned over the stroke, start to end — the gyro " +
+            "integrated across the stroke, taken as net rotation rather than total " +
+            "distance travelled, so a stroke that wanders out and back doesn't count " +
+            "the wander twice.",
+      why: "This is the size of the stroke — the arc the rod travels through. It is " +
+           "the number that changes when you lengthen or shorten the casting stroke, " +
+           "so an arc that jumps around means you are not making the same cast twice."
+    },
+    "Duration": {
+      what: "How long the stroke lasted, from the first sample of the stroke to the " +
+            "last, in seconds.",
+      why: "Arc and duration together are tempo. Two casts with the same arc and " +
+           "different durations are different casts, and drifting duration is usually " +
+           "rhythm rather than technique."
+    },
+    "Peak rate": {
+      what: "The fastest the handle rotated at any instant in the stroke, in degrees " +
+            "per second.",
+      why: "It is the closest a handle sensor gets to how hard the rod was driven — " +
+           "rotation rate is what bends the rod. Note it is measured at the handle, so " +
+           "it says what you did, not what the tip did."
+    },
+    "Peak at": {
+      what: "Where in the stroke the peak rotation rate falls, as a percentage of the " +
+            "stroke's length. 0% is the very start, 100% the very end.",
+      why: "It describes the shape of the stroke rather than its size. A late peak " +
+           "means the rod is still speeding up deep into the stroke; an early peak " +
+           "means the speed was made at the front and coasted from there."
+    },
+    "Stop decel": {
+      what: "The sharpest deceleration anywhere after the peak, in degrees per second " +
+            "squared — how hard the rotation was killed.",
+      why: "The stop is what unloads the rod, so this is the abruptness of the stop " +
+           "itself. Of everything here it is the metric most directly about the " +
+           "moment the loop is formed."
+    },
+    "Stop share": {
+      what: "The share of the stroke's time spent stopping — from the peak rotation " +
+            "rate until the rate has fallen to a fifth of it.",
+      why: "A crisp stop is a small number. A large share means the stop is being " +
+           "eased through over much of the stroke rather than made at the end of it."
+    },
+    "Planarity": {
+      what: "The share of the stroke's net rotation that lies about a single axis. " +
+            "100% is a stroke that stayed in one plane; the remainder is rotation " +
+            "about the other two axes.",
+      why: "A cast that stays in its plane tracks straight, and the overhead view in " +
+           "the swing path is the same fact drawn. It also picks up how the sensor is " +
+           "mounted, which is why it sits out of the headline score."
+    },
+    "Peak accel": {
+      what: "The largest total acceleration seen at the handle during the stroke, in g, " +
+            "gravity included — so a motionless handle reads about 1 g, not 0.",
+      why: "Mostly a sanity check on the recording and the mount rather than a " +
+           "technique number: it depends heavily on where on the handle the sensor " +
+           "sits. Excluded from the headline for that reason."
     }
+  };
+
+  // 100 − CV. Never below zero: a metric can vary by more than its own mean
+  // (CV over 100%), and "−40% consistent" would be noise dressed as a reading.
+  function consistencyPct(cvPct) { return Math.max(0, 100 - cvPct); }
+
+  function metricCell(name) {
+    return METRIC_DEFS[name]
+      ? '<td><button type="button" class="metric" aria-expanded="false">' +
+        name + "</button></td>"
+      : "<td>" + name + "</td>";
+  }
+
+  function defRow(name, cols) {
+    var d = METRIC_DEFS[name];
+    if (!d) return "";
+    return '<tr class="defrow hidden"><td colspan="' + cols + '">' + d.what +
+      '<span class="why"><b>Why it matters.</b> ' + d.why + "</span></td></tr>";
   }
 
   /* Min, max and the outlier list are dropped in a compare column: three columns
-     of them don't fit, and mean/SD/CV are what the eye compares across sessions. */
+     of them don't fit, and mean, SD and consistency are what the eye compares
+     across sessions. */
   function spreadRows(p, full) {
     return A.spreads(p.strokes).map(function (sp) {
       var dec = sp.unit === "s" ? 3 : (sp.mean < 10 ? 2 : 0);
-      var row = "<tr><td>" + sp.name + "</td><td>" + f(sp.mean, dec) + "</td><td>" +
-        f(sp.sd, dec) + "</td><td>" + f(sp.cvPct, 1) + "%</td>";
-      if (!full) return row + "</tr>";
+      var row = "<tr>" + metricCell(sp.name) + "<td>" + f(sp.mean, dec) + "</td><td>" +
+        f(sp.sd, dec) + "</td><td>" + f(consistencyPct(sp.cvPct), 1) + "%</td>";
+      if (!full) return row + "</tr>" + defRow(sp.name, 4);
       var out = sp.outliers.map(function (i) { return "#" + p.strokes[i].index; }).join(" ");
       return row + "<td>" + f(sp.min, dec) + "</td><td>" + f(sp.max, dec) +
-        '</td><td class="flag">' + out + "</td></tr>";
+        '</td><td class="flag">' + out + "</td></tr>" + defRow(sp.name, 7);
     }).join("");
+  }
+
+  // Delegated: every one of these tables is rebuilt on each render.
+  document.addEventListener("click", function (e) {
+    var btn = e.target.closest && e.target.closest("button.metric");
+    if (!btn) return;
+    var shown = btn.getAttribute("aria-expanded") !== "true";
+
+    // In compare mode the columns are read across, row against row. Opening a
+    // definition in one column only would push that column's rows out of step
+    // with its neighbours, so the same metric opens in all of them.
+    var grid = $("cmp-grid");
+    var peers = grid && grid.contains(btn)
+      ? Array.prototype.filter.call(grid.querySelectorAll("button.metric"), function (b) {
+          return b.textContent === btn.textContent;
+        })
+      : [btn];
+
+    peers.forEach(function (b) {
+      var row = b.closest("tr").nextElementSibling;
+      if (!row || !row.classList.contains("defrow")) return;
+      row.classList.toggle("hidden", !shown);
+      b.setAttribute("aria-expanded", String(shown));
+    });
+  });
+
+  /* The measurement is spread; the reading is its complement, because "how alike
+     are my strokes" is the question being asked. Both are shown — the spread is
+     what was measured and hiding it would be sleight of hand. */
+  function verdictHtml(cv) {
+    if (cv === null) {
+      return '<span class="big mono">—</span>' +
+             '<span class="word">three or more strokes needed</span>';
+    }
+    return '<span class="big mono">' + f(consistencyPct(cv), 1) + "%</span>" +
+      '<span class="word">consistency · ' + A.verdict(cv) +
+      ' <span class="sub">(' + f(cv, 1) + "% spread)</span></span>";
   }
 
   function renderCompare(a, b) {
@@ -668,9 +806,9 @@
       var note = pooled === 0 ? "—"
         : Math.abs(delta) > 2 * pooled ? "clear"
         : Math.abs(delta) > pooled ? "possible" : "within noise";
-      return "<tr><td>" + x.name + "</td><td>" + f(x.mean, dec) + "</td><td>" +
+      return "<tr>" + metricCell(x.name) + "<td>" + f(x.mean, dec) + "</td><td>" +
         f(y.mean, dec) + "</td><td>" + (delta >= 0 ? "+" : "") + f(pct, 1) +
-        "%</td><td>" + note + "</td></tr>";
+        "%</td><td>" + note + "</td></tr>" + defRow(x.name, 5);
     }).join("");
   }
 
@@ -977,6 +1115,9 @@
 
   function renderCompareGrid() {
     var grid = $("cmp-grid");
+    stopCompare();
+    cmpClock = 0;
+    $("cmp-clock").textContent = "0.00 s";
     grid.innerHTML = "";
     grid.style.gridTemplateColumns = "repeat(" + sessions.length + ", minmax(0,1fr))";
     cmp = sessions.map(function (p) { return buildCompareColumn(p, grid); });
@@ -1058,19 +1199,16 @@
       thin.textContent = "Consistency needs at least two strokes.";
       col.appendChild(thin);
     } else {
-      var cv = A.repeatabilityCV(p.strokes);
       var verdict = document.createElement("div");
       verdict.className = "verdict";
-      verdict.innerHTML = '<span class="big mono">' + (cv === null ? "—" : f(cv, 1) + "%") +
-        '</span><span class="word">' +
-        (cv === null ? "three or more strokes needed" : A.verdict(cv)) + "</span>";
+      verdict.innerHTML = verdictHtml(A.repeatabilityCV(p.strokes));
       col.appendChild(verdict);
 
       var wrap = document.createElement("div");
       wrap.className = "tablewrap";
       wrap.innerHTML = "<table><thead><tr>" +
         '<th scope="col">Metric</th><th scope="col">Mean</th>' +
-        '<th scope="col">SD</th><th scope="col">CV</th>' +
+        '<th scope="col">SD</th><th scope="col">Consistent</th>' +
         "</tr></thead><tbody>" + spreadRows(p, false) + "</tbody></table>";
       col.appendChild(wrap);
     }
@@ -1093,7 +1231,9 @@
   }
 
   function selectCompareBurst(state, b, quiet) {
+    if (!quiet) stopCompare();
     state.burst = b;
+    state.pos = b.pts.length - 1;
     if (state.chips) {
       Array.prototype.forEach.call(state.chips.children, function (btn) {
         btn.setAttribute("aria-pressed", String(Number(btn.textContent) === b.index));
@@ -1114,15 +1254,54 @@
     if (!quiet) drawColumn(state);
   }
 
-  // The whole burst is drawn, not a playhead sweep: a still comparison is what
-  // the columns are for, so every stroke in the chosen burst is coloured in.
+  // At rest a column shows its whole burst — a still comparison is what the
+  // columns are for. Play walks every column back to the start and sweeps them
+  // together.
   function drawColumn(state) {
     if (!state.burst || !state.side) return;
-    drawSwingPair(state.side, state.top, state.burst,
-                  state.burst.pts.length - 1, state.flip);
+    var pos = state.pos === undefined ? state.burst.pts.length - 1 : state.pos;
+    drawSwingPair(state.side, state.top, state.burst, pos, state.flip);
   }
 
   function drawCompare() { cmp.forEach(drawColumn); }
+
+  /* ---------- playing the columns together ---------- */
+  var cmpTimer = null, cmpClock = 0;
+
+  function stopCompare() {
+    if (cmpTimer) { clearInterval(cmpTimer); cmpTimer = null; }
+    var btn = $("cmp-play");
+    if (btn) btn.textContent = "Play all";
+  }
+
+  function columnAtEnd(s) { return !s.burst || s.pos >= s.burst.pts.length - 1; }
+
+  $("cmp-play").addEventListener("click", function () {
+    if (cmpTimer) { stopCompare(); return; }
+    var live = cmp.filter(function (s) { return s.burst && s.side; });
+    if (!live.length) return;
+    if (live.every(columnAtEnd)) {
+      cmpClock = 0;
+      live.forEach(function (s) { s.pos = 0; });
+    }
+    this.textContent = "Pause";
+
+    // Stepped on a clock rather than by sample count: two sessions can be
+    // recorded at different rates, and the whole point of the button is that
+    // the columns share one clock rather than one index. A burst that ends
+    // early holds on its last frame instead of stopping the others.
+    cmpTimer = setInterval(function () {
+      cmpClock += 0.02;
+      live.forEach(function (s) {
+        var t = s.burst.t, t0 = t[0], i = s.pos;
+        while (i < t.length - 1 && t[i + 1] - t0 <= cmpClock) i++;
+        s.pos = i;
+        drawColumn(s);
+      });
+      $("cmp-clock").textContent = f(cmpClock, 2) + " s";
+      if (live.every(columnAtEnd)) stopCompare();
+    }, 20);
+  });
 
   /* ---------- trace ---------- */
   function drawTrace() {
