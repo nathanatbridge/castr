@@ -18,7 +18,7 @@ proves about the sensor carries straight over to the phone.
 ## Quick start (no Xcode needed)
 
 ```sh
-swift build                              # ~2.5 min cold on an Intel Mac
+swift build                              # about 2.5 min cold on an Intel Mac
 swift run castr-selftest                 # 290 checks, no hardware required
 ./.build/debug/castr-collect --help
 ```

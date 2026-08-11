@@ -47,20 +47,34 @@ let arc = (net[0]*net[0] + net[1]*net[1] + net[2]*net[2]).squareRoot()
 A back cast and a forward cast are the same motion in opposite directions. Projecting
 the signed rotation onto the session's dominant rotation axis:
 
-| session | casting strokes | alternation breaks |
-|---|---|---|
-| slow1 | 19 | 1 — the pickup, see below |
-| cast2 | 16 | 0 |
-| benchtest1 | 19 | 0 |
-| benchtest2 | 32 | 0 |
-| benchtest3 | 44 | 0 |
-| fish1 | 48 | 0 |
+| session | caster | casting strokes | alternation breaks |
+|---|---|---|---|
+| slow1 | Nate | 19 | 1 — the pickup, see below |
+| cast2 | Nate | 16 | 0 |
+| benchtest1 | Nate | 19 | 0 |
+| benchtest2 | Nate | 32 | 0 |
+| benchtest3 | Nate | 44 | 0 |
+| fish1 | Nate | 48 | 0 |
+| nate-updown | Nate | 18 | 0 |
+| nate-falsecast | Nate | 20 | 0 |
+| **dad-updown** | **Dad** | 18 | 0 |
+| **dad-falsecast** | **Dad** | 21 | 0 |
+| **sam-updown** | **Sam** | 14 | 0 |
+| **sam-falsecast** | **Sam** | 20 | 0 |
 
-**178 casting strokes across six sessions, strictly alternating, one break.** That break
-is `slow1` #1, the pickup, which is Z-dominant (83.8° of a 99.9° arc) while every cast
-in the session is X-dominant — it is off the casting plane, so its projection onto the
-casting axis carries no meaning. This is the strongest result in the project and the
-thing the classifier should be built on.
+**289 casting strokes across twelve sessions and three casters, strictly alternating,
+one break.** That break is `slow1` #1, the pickup, which is Z-dominant (83.8° of a 99.9°
+arc) while every cast in the session is X-dominant — it is off the casting plane, so its
+projection onto the casting axis carries no meaning. This is the strongest result in the
+project and the thing the classifier should be built on.
+
+**It generalises to casters it has never seen.** Dad and Sam were recorded 2026-08-08 on
+the same rod and mount, doing counted motions: 10 forward false casts each, and
+pick-up-and-lay-down casts until they stopped. 61 casts between them, zero breaks, and
+the detector returned exactly the count the motion implies — 10 forwards and 10 backs,
+plus the pickup. Every up-down session came back an exact even split (9/9, 9/9, 7/7),
+which is itself the proof nothing merged: a merged pair loses a stroke, turning the
+count odd, and leaves a survivor with a tiny arc off a long path (§5). Neither appears.
 
 This supersedes an earlier count of 34 strokes over three sessions. The figure was low
 because the detector was merging cast pairs — see §5, which is now resolved. Signed
@@ -86,26 +100,67 @@ Secondary findings:
 ## 3. The one thing that cannot be done without tagging: **delivery**
 
 From above the cork grip, "I delivered" and "I stopped false casting" look the same.
-Rod load and line release are not observable at the handle — the README says this and
-the data confirms it.
+Rod load and line release are not observable at the handle — the README says this, and
+a controlled experiment now confirms it.
 
-Evidence: in `benchtest1` the classifier confidently labelled #20 as a delivery. There
+### The experiment
+
+The 2026-08-08 sessions produced a matched pair per caster, which is exactly the
+comparison this needed:
+
+- `*-updown.csv` — pick up and lay down with the line fully extended, so **every
+  forward stroke is a delivery**
+- `*-falsecast.csv` — false casting, so **every forward stroke is not**
+
+Same caster, same rod, same mount, **same 20 ft of line**, minutes apart. Comparing
+forward strokes between the two files is therefore a within-caster test of delivery
+against false cast with everything else genuinely held still — including line length,
+which §4c and `fish1` both show drives arc and tempo. Verdicts use the pooled-spread
+rule from `Report.swift`:
+
+| metric | Nate | Dad | Sam |
+|---|---|---|---|
+| arc | possible +14° | **CLEAR +40°** | **CLEAR −23°** |
+| peak rate | within noise | **CLEAR +67 °/s** | **CLEAR −72 °/s** |
+| stop decel | within noise | within noise | within noise |
+| duration | within noise | possible | within noise |
+| stop share | within noise | within noise | possible |
+| peak accel | within noise | within noise | possible |
+
+**No metric separates the two consistently.** Arc and peak rate differ *clearly* — and
+in **opposite directions between casters**. Dad opens up and accelerates into a
+delivery; Sam shortens and slows down. That is technique, not physics. A threshold on
+either would need per-caster calibration and would still be detecting the caster's
+habit rather than the delivery.
+
+One footnote worth keeping: stop deceleration came out lower for the delivery in all
+three casters (−309, −260, −236 °/s²). Three-for-three on sign, but every one sits
+inside the pooled spread, so it is not evidence. It is the single direction worth
+re-testing if more casters turn up.
+
+### Earlier evidence, consistent with the above
+
+In `benchtest1` the prototype classifier confidently labelled #20 as a delivery. There
 was no delivery in that session; it was continuous false casting that stopped. Every
 backup heuristic fails the same way — #20 is also the fastest stroke (887 °/s), also
 the last, also followed by quiet.
 
 A follow-through test (rod attitude after the last cast vs. between casts) was
-inconclusive:
+inconclusive: `cast2` held ±3° between casts then settled **27°** away, a real
+follow-through; `benchtest1` had a between-cast spread of **±74°**, no still moments at
+that tempo and so no baseline; `slow1` ended 0.9 s after the last cast, no data at all.
 
-- `cast2` — between-cast attitude held ±3°, then settled **27°** away. A real
-  follow-through; that session probably did end in a delivery.
-- `benchtest1` — between-cast spread **±74°**. At that tempo there are no still
-  moments, so there is no baseline to measure a settle against.
-- `slow1` — session ended 0.9 s after the last cast. No data.
+**Resolution: tag the delivery.** One key per sequence, solo-friendly, and it fills the
+classifier's only real gap. This is now a measured conclusion rather than an assumption,
+so Stage 4 should take the delivery from the tag and not attempt to infer it.
 
-**Resolution: tag only the delivery.** One key per sequence, solo-friendly, and it
-fills the classifier's only real gap. `benchtest3` and `fish1` were recorded on that
-basis.
+### The consolation prize: free labelled data
+
+A pick-up-and-lay-down session labels itself. Every stroke is a pickup or a delivery by
+construction, alternating. The three `*-updown` sessions therefore provide **25 known
+deliveries and 25 known pickups** with no tagging, no reaction-lag problem, and no
+dependence on the broken §4a matcher. That is ground truth for the two classes that are
+hardest to obtain, and it should be the backbone of Stage 5's validation set.
 
 ---
 
@@ -216,6 +271,33 @@ this document was written against them.
 | `benchtest3` | 20,598 | 104 s | 199 Hz | 49 *(32)* | 44 *(12)* | 5 | full rod, **20 ft line**. Includes at least one deliberate non-delivery stop. |
 | `fish1` | 36,848 | 186 s | 198 Hz | 82 *(52)* | 48 *(5)* | 6 | **natural fishing, 15 → 40 ft progressive**. Most realistic session. |
 
+### Three-caster set, 2026-08-08
+
+Same rod, same mount, one afternoon, and **roughly 20 ft of line out the tip for every
+session** — up-downs and false casts alike. Counted motions, so the expected stroke
+count is known in advance (§2). Recorded with `--no-tags` on the up-downs; no key was
+pressed on the false casts, so no sidecars exist.
+
+Line length being constant across all six is what makes the `-updown` / `-falsecast`
+pairing in §3 a controlled experiment rather than a confounded one. It also puts this
+set on the same footing as `benchtest3`, which was Nate at 20 ft on 2026-08-04.
+
+| session | samples | dur | rate | strokes | casts | taps | what it is |
+|---|---|---|---|---|---|---|---|
+| `nate-updown` | 8,575 | 43 s | 198 Hz | 18 | 18 | — | pick up and lay down, line fully extended. **Every stroke is a pickup or a delivery.** |
+| `dad-updown` | 6,759 | 34 s | 198 Hz | 19 | 18 | — | as above, Dad |
+| `sam-updown` | 6,838 | 35 s | 198 Hz | 14 | 14 | — | as above, Sam. 7 cycles, not 10 — no set count was agreed. |
+| `nate-falsecast` | 6,007 | 30 s | 197 Hz | 21 | 20 | — | 10 forward false casts + pickup |
+| `dad-falsecast` | 4,543 | 23 s | 197 Hz | 21 | 20 | — | as above, Dad |
+| `sam-falsecast` | 4,871 | 25 s | 198 Hz | 20 | 20 | — | as above, Sam |
+
+The `-updown` / `-falsecast` pair per caster is the matched comparison §3 rests on.
+
+**Still not captured:** casting experience per person. Sam's arcs run 24% wider than the
+other two (§6 below), and without knowing whether that is a practised caster or a
+first-timer there is no way to tell technique from inexperience. Worth asking before
+these sessions are used for anything skill-related.
+
 "Casts" counts strokes at or above a **relative** arc threshold — half the median arc of
 the largest third of the session. §4c rules out a constant.
 
@@ -224,7 +306,13 @@ no clipping (peak 7.15 g of 16, 887 °/s of 2000), 99.6% unique timestamps, zero
 negative deltas. The reconstructed time base is working — the WitMotion app's own
 export managed 18.4% unique with 40 backwards.
 
-**Caveat on the whole corpus:** one caster, one rod, one mount orientation.
+**Caveat on the whole corpus:** ~~one caster~~ three casters as of 2026-08-08, but still
+**one rod and one mount orientation**. Caster generalisation is now tested (§2); rod and
+mount are not.
+
+Caster differences are real and worth remembering before any threshold is fitted. On the
+same rod and the same counted motion, mean false-cast arc was 114° for Nate, 114° for
+Dad and **141° for Sam** — whose minimum, 128°, is above both of their means.
 
 ---
 
@@ -272,12 +360,17 @@ Not yet done. Ordered by value.
    repeat a short sequence. Directly tests whether Stage 2's normalization works. Can
    invalidate a design decision, so worth doing early.
 2. **Two-person full tagging.** One careful session with a second person tagging
-   *every* stroke. This is the validation set for Stage 5. Solo tagging of all four
-   labels has already been shown not to work (`benchtest1`).
-3. Second caster — generalization; all current data is one person's mechanics.
+   *every* stroke. Still the validation set for the false-cast labels; Solo tagging of
+   all four labels has already been shown not to work (`benchtest1`). Less urgent than
+   it was — the `*-updown` sessions already supply 25 labelled pickups and 25 labelled
+   deliveries for free (§3), so what is missing is ground truth for *false back* versus
+   *false forward*.
+3. ~~Second caster~~ — **done 2026-08-08.** Dad and Sam, 61 casts, zero alternation
+   breaks (§2). The finding generalises across casters.
 4. Deliberate bad casts — tailing loops, breaking the wrist, creep. Needed eventually
    for diagnosis features.
-5. Different rod action / length.
+5. **Different rod** — now the largest untested variable, since caster is covered and
+   everything in the corpus is one rod. Action and length change tempo and load.
 
 ---
 
@@ -292,3 +385,8 @@ Not yet done. Ordered by value.
 **Worth doing early, now that there is far more data than the roadmap assumed:**
 §8's mount-orientation test. Stage 2 normalisation is the next real design decision and
 that test can invalidate it in five minutes.
+
+**Settled 2026-08-08, so stop revisiting it:** delivery detection from the handle. §3
+now has a controlled within-caster experiment across three people, and there is no
+consistent signal. Stage 4 takes the delivery from the tag. The corresponding gain is
+that `*-updown` sessions are self-labelling — 25 pickups and 25 deliveries, free.

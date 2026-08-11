@@ -13,6 +13,7 @@ normal code directory.
 |---|---|
 | `CLAUDE.md` | Auto-loads into a Claude session. Build/test commands, layout, the constraints that are easy to violate. |
 | `PLAN.md` | Full state of the stroke-identification work: the 178-cast alternation finding, why delivery can't be auto-detected, the broken assumptions, the corpus table, the six-stage roadmap. |
+| `APP-PLAN.md` | Turning the project into an app: web first to settle what a session should say, then native iOS for the field. Runs in parallel with `PLAN.md`, not after it. |
 | `README.md` | How the system works — sensor protocol, mounting, bring-up, tagging, analysis. |
 
 ---
@@ -81,7 +82,7 @@ swiftc -parse ios/ContentView.swift   # the only check available for iOS
 ### Recording a session
 
 ```sh
-./.build/debug/castr-collect --check                       # sensor still, 15s, must read ~1.000 g
+./.build/debug/castr-collect --check     # sensor still, 15s, must read about 1.000 g
 ./.build/debug/castr-collect -o session.csv --despike --rate 200
 ```
 
@@ -145,5 +146,7 @@ Next, from `PLAN.md` §9:
 Worth doing early: the mount-orientation test in `PLAN.md` §8. Stage 2 is the next real
 design decision and five minutes of recording can invalidate it.
 
-Longer term the direction is a real website and app rather than the GitHub Pages
-analyser.
+The app direction now has its own plan — `APP-PLAN.md`. Web app first to settle what a
+session report should say, native iOS after, with Xcode installing in the background
+from day one because it is the long pole. It runs alongside the algorithm work rather
+than waiting for it.
