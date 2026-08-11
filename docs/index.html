@@ -151,6 +151,32 @@
   .legend i{width:14px;height:3px;border-radius:2px;flex:none}
   .legend i.dot{width:9px;height:9px;border-radius:50%}
   .warn{color:var(--s2)}
+
+  /* ---------- compare ---------- */
+  .viewbar{display:flex;align-items:center;gap:12px 16px;flex-wrap:wrap}
+  /* One column per session. Nothing inside a column sits side by side, so two or
+     three sessions read across the page instead of down it. */
+  .cmpgrid{display:grid;gap:18px}
+  @media (max-width:820px){.cmpgrid{grid-template-columns:1fr !important}}
+  .cmpcol{display:flex;flex-direction:column;gap:10px;min-width:0}
+  .cmphead{display:flex;flex-direction:column;gap:1px;padding-bottom:8px;
+    border-bottom:1px solid var(--axis)}
+  .cmphead .t{font-size:15px;font-weight:620;letter-spacing:-.01em;
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .cmphead .s{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:10.5px;
+    letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+  .cmpctl{display:flex;align-items:center;gap:8px 12px;flex-wrap:wrap}
+  .cmpcol .view canvas{width:100%;height:250px}
+  .cmpfacts{display:flex;flex-wrap:wrap;gap:3px 12px;
+    font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px;color:var(--ink-2)}
+  .cmpfacts span{white-space:nowrap}
+  .cmpfacts b{color:var(--ink);font-weight:600}
+  .cmpcol .verdict .big{font-size:24px}
+  .cmpcol .verdict .word{font-size:13px}
+  .cmpcol table{min-width:0}
+  .cmpcol th,.cmpcol td{padding:6px 10px;font-size:11.5px}
+  .cmpnone{background:var(--surface);border:1px solid var(--rule);border-radius:3px;
+    padding:14px;font-size:13px;color:var(--ink-2)}
 </style>
 </head>
 <body>
@@ -169,9 +195,11 @@
   </div>
 
   <div class="drop" id="drop">
-    <p><strong>Drop a CSV here</strong>, or choose a file. Add a second to compare two sessions.</p>
+    <p><strong>Drop a CSV here</strong>, or choose a file. Add up to three to compare sessions
+      side by side.</p>
     <div class="row">
       <button class="primary" id="pick">Choose file</button>
+      <button class="ghost" id="pick-compare">Compare sessions</button>
       <button class="ghost" id="example">Load example session</button>
     </div>
     <p class="hint">Recordings come from <code>castr-collect</code>. WitMotion app exports work too.</p>
@@ -179,44 +207,21 @@
   </div>
 
   <div id="error" class="err hidden"></div>
-  <div class="files hidden" id="files"></div>
+
+  <div class="viewbar hidden" id="viewbar">
+    <div class="files" id="files"></div>
+    <div class="chips" id="modes" role="group" aria-label="View">
+      <button type="button" id="mode-single" aria-pressed="true">Single session</button>
+      <button type="button" id="mode-compare" aria-pressed="false">Compare</button>
+    </div>
+    <button class="ghost" id="addmore">Add a session</button>
+  </div>
 
   <div id="results" class="hidden" style="display:flex;flex-direction:column;gap:28px">
 
+   <div id="single-view" style="display:flex;flex-direction:column;gap:28px">
+
     <div class="strip" id="strip"></div>
-
-    <section>
-      <h2>Rotation over the session</h2>
-      <p class="note">
-        Strokes are detected on rotation rate — a cast is a rotation of the rod, and the
-        handle's acceleration mostly tracks gravity's direction as the rod tilts. Shaded
-        bands are the detected strokes.
-      </p>
-      <div class="figure">
-        <div class="figtitle">
-          <span>Rotation rate · °/s</span><span id="tracepeak"></span>
-        </div>
-        <div class="canvas-wrap">
-          <canvas id="trace" height="190" aria-label="Rotation rate over the session"></canvas>
-        </div>
-      </div>
-    </section>
-
-    <section>
-      <h2>Strokes</h2>
-      <div class="tablewrap">
-        <table>
-          <caption>Stop deceleration is how hard the rod was stopped — what unloads it. Stop share is the portion of the stroke spent stopping; crisp stops are small.</caption>
-          <thead><tr>
-            <th scope="col">#</th><th scope="col">t s</th><th scope="col">dur s</th>
-            <th scope="col">arc °</th><th scope="col">peak °/s</th><th scope="col">peak at</th>
-            <th scope="col">stop decel °/s²</th><th scope="col">stop %</th>
-            <th scope="col">planar %</th><th scope="col">peak g</th>
-          </tr></thead>
-          <tbody id="strokes"></tbody>
-        </table>
-      </div>
-    </section>
 
     <section id="swing-section">
       <h2>Swing path</h2>
@@ -329,6 +334,63 @@
       </div>
     </section>
 
+    <section>
+      <h2>Rotation over the session</h2>
+      <p class="note">
+        Strokes are detected on rotation rate — a cast is a rotation of the rod, and the
+        handle's acceleration mostly tracks gravity's direction as the rod tilts. Shaded
+        bands are the detected strokes.
+      </p>
+      <div class="figure">
+        <div class="figtitle">
+          <span>Rotation rate · °/s</span><span id="tracepeak"></span>
+        </div>
+        <div class="canvas-wrap">
+          <canvas id="trace" height="190" aria-label="Rotation rate over the session"></canvas>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>Strokes</h2>
+      <div class="tablewrap">
+        <table>
+          <caption>Stop deceleration is how hard the rod was stopped — what unloads it. Stop share is the portion of the stroke spent stopping; crisp stops are small.</caption>
+          <thead><tr>
+            <th scope="col">#</th><th scope="col">t s</th><th scope="col">dur s</th>
+            <th scope="col">arc °</th><th scope="col">peak °/s</th><th scope="col">peak at</th>
+            <th scope="col">stop decel °/s²</th><th scope="col">stop %</th>
+            <th scope="col">planar %</th><th scope="col">peak g</th>
+          </tr></thead>
+          <tbody id="strokes"></tbody>
+        </table>
+      </div>
+    </section>
+
+   </div><!-- /single-view -->
+
+    <section id="cmp-section" class="hidden">
+      <h2>Compare</h2>
+      <p class="note">
+        One column per session, read across. Each column is that session's swing path —
+        side elevation, then the same burst seen from above — over its consistency table.
+        The two views within a session share one scale, but scale is fitted per session, so
+        compare shape and spread here and read absolute sizes off the tables.
+      </p>
+      <div class="cmpgrid" id="cmp-grid"></div>
+      <div class="legend">
+        <span><i style="background:var(--s1)"></i>Stroke one way</span>
+        <span><i style="background:var(--s2)"></i>Stroke the other way</span>
+        <span><i class="dot" style="background:var(--s3)"></i>Sensor</span>
+        <span><i class="dot" style="background:var(--ink-2)"></i>Pivot</span>
+        <span><i style="background:var(--axis)"></i>Arm</span>
+      </div>
+      <p class="note">
+        Grid squares are 10&nbsp;cm. Consistency is the spread across each session's own
+        strokes — a session can be tight and still differ from the one beside it.
+      </p>
+    </section>
+
     <section id="compare-section" class="hidden">
       <h2>Comparison</h2>
       <p class="note">
@@ -364,6 +426,8 @@
   "use strict";
   var A = window.CastrAnalysis;
   var sessions = [];
+  var MAX_SESSIONS = 3;      // three columns is what the page width holds legibly
+  var mode = "single";       // "single" | "compare"
 
   var $ = function (id) { return document.getElementById(id); };
   function f(v, d) { return (isFinite(v) ? v : 0).toFixed(d === undefined ? 0 : d); }
@@ -375,13 +439,34 @@
     var dark = cur ? cur === "dark"
       : window.matchMedia("(prefers-color-scheme: dark)").matches;
     document.documentElement.setAttribute("data-theme", dark ? "light" : "dark");
-    if (sessions.length) { drawTrace(); drawSwing(); }
+    if (!sessions.length) return;
+    if (mode === "compare") drawCompare(); else { drawTrace(); drawSwing(); }
   });
 
   /* ---------- file intake ---------- */
   var drop = $("drop"), input = $("file");
-  $("pick").addEventListener("click", function () { input.click(); });
+  // Picking through Compare means "show me these together" — the mode follows the
+  // intent rather than making the caster set it twice.
+  var wantCompare = false;
+  $("pick").addEventListener("click", function () { wantCompare = false; input.click(); });
+  $("addmore").addEventListener("click", function () { wantCompare = false; input.click(); });
+  $("pick-compare").addEventListener("click", function () {
+    if (sessions.length >= 2) { setMode("compare"); return; }
+    wantCompare = true;
+    input.click();
+  });
   input.addEventListener("change", function (e) { handleFiles(e.target.files); input.value = ""; });
+
+  $("mode-single").addEventListener("click", function () { setMode("single"); });
+  $("mode-compare").addEventListener("click", function () {
+    if (sessions.length < 2) { wantCompare = true; input.click(); return; }
+    setMode("compare");
+  });
+
+  function setMode(m) {
+    mode = m;
+    render();
+  }
 
   ["dragenter", "dragover"].forEach(function (t) {
     drop.addEventListener(t, function (e) { e.preventDefault(); drop.classList.add("over"); });
@@ -404,7 +489,7 @@
   });
 
   function handleFiles(list) {
-    Array.prototype.slice.call(list, 0, 2).forEach(function (file) {
+    Array.prototype.slice.call(list, 0, MAX_SESSIONS).forEach(function (file) {
       var reader = new FileReader();
       reader.onload = function () {
         addSession(String(reader.result), file.name.replace(/\.csv$/i, ""));
@@ -431,22 +516,28 @@
     }
     $("error").classList.add("hidden");
     var strokes = A.analyze(parsed);
-    if (sessions.length >= 2) sessions.shift();
+    if (sessions.length >= MAX_SESSIONS) sessions.shift();
     sessions.push({ session: parsed, strokes: strokes });
+    if (wantCompare && sessions.length >= 2) { wantCompare = false; mode = "compare"; }
     render();
   }
 
-  function removeSession(i) { sessions.splice(i, 1); render(); }
+  function removeSession(i) {
+    sessions.splice(i, 1);
+    if (sessions.length < 2) mode = "single";
+    render();
+  }
 
   /* ---------- render ---------- */
   function render() {
     var host = $("files");
     if (!sessions.length) {
-      host.classList.add("hidden");
+      $("viewbar").classList.add("hidden");
       $("results").classList.add("hidden");
       return;
     }
-    host.classList.remove("hidden");
+    if (sessions.length < 2) mode = "single";
+    $("viewbar").classList.remove("hidden");
     host.innerHTML = "";
     sessions.forEach(function (s, i) {
       var pill = document.createElement("span");
@@ -461,16 +552,37 @@
       host.appendChild(pill);
     });
 
+    $("mode-single").setAttribute("aria-pressed", String(mode === "single"));
+    $("mode-compare").setAttribute("aria-pressed", String(mode === "compare"));
+    $("mode-compare").disabled = false;
+    $("addmore").disabled = sessions.length >= MAX_SESSIONS;
+    $("addmore").textContent = sessions.length >= MAX_SESSIONS
+      ? "Three is the limit" : "Add a session";
+
     $("results").classList.remove("hidden");
+
+    if (mode === "compare") {
+      stopSwing();
+      $("single-view").classList.add("hidden");
+      $("cmp-section").classList.remove("hidden");
+      renderCompareGrid();
+      // The change table is a two-session statement; with three loaded there is no
+      // single "before" to measure against, so it stands down rather than guessing.
+      if (sessions.length === 2) renderCompare(sessions[0], sessions[1]);
+      else $("compare-section").classList.add("hidden");
+      return;
+    }
+
+    $("single-view").classList.remove("hidden");
+    $("cmp-section").classList.add("hidden");
+    $("compare-section").classList.add("hidden");
+    cmp = [];
     var primary = sessions[0];
     renderStrip(primary);
     renderStrokes(primary);
     renderSwing(primary);
     renderConsistency(primary);
     drawTrace();
-
-    if (sessions.length === 2) renderCompare(sessions[0], sessions[1]);
-    else $("compare-section").classList.add("hidden");
   }
 
   function escapeHtml(s) {
@@ -511,14 +623,7 @@
     if (p.strokes.length < 2) { sec.classList.add("hidden"); return; }
     sec.classList.remove("hidden");
 
-    var sps = A.spreads(p.strokes);
-    $("spreads").innerHTML = sps.map(function (sp) {
-      var dec = sp.unit === "s" ? 3 : (sp.mean < 10 ? 2 : 0);
-      var out = sp.outliers.map(function (i) { return "#" + p.strokes[i].index; }).join(" ");
-      return "<tr><td>" + sp.name + "</td><td>" + f(sp.mean, dec) + "</td><td>" +
-        f(sp.sd, dec) + "</td><td>" + f(sp.cvPct, 1) + "%</td><td>" + f(sp.min, dec) +
-        "</td><td>" + f(sp.max, dec) + '</td><td class="flag">' + out + "</td></tr>";
-    }).join("");
+    $("spreads").innerHTML = spreadRows(p, true);
 
     var cv = A.repeatabilityCV(p.strokes);
     if (cv === null) {
@@ -528,6 +633,20 @@
       $("repcv").textContent = f(cv, 1) + "%";
       $("repword").textContent = A.verdict(cv);
     }
+  }
+
+  /* Min, max and the outlier list are dropped in a compare column: three columns
+     of them don't fit, and mean/SD/CV are what the eye compares across sessions. */
+  function spreadRows(p, full) {
+    return A.spreads(p.strokes).map(function (sp) {
+      var dec = sp.unit === "s" ? 3 : (sp.mean < 10 ? 2 : 0);
+      var row = "<tr><td>" + sp.name + "</td><td>" + f(sp.mean, dec) + "</td><td>" +
+        f(sp.sd, dec) + "</td><td>" + f(sp.cvPct, 1) + "%</td>";
+      if (!full) return row + "</tr>";
+      var out = sp.outliers.map(function (i) { return "#" + p.strokes[i].index; }).join(" ");
+      return row + "<td>" + f(sp.min, dec) + "</td><td>" + f(sp.max, dec) +
+        '</td><td class="flag">' + out + "</td></tr>";
+    }).join("");
   }
 
   function renderCompare(a, b) {
@@ -687,12 +806,14 @@
     });
   }
 
+  function drawSwing() {
+    if (!swing.burst) return;
+    drawSwingPair($("c-side"), $("c-top"), swing.burst, swing.pos, swing.flip);
+  }
+
   /* Both views are drawn at one scale so the overhead view being flat means the
      swing is planar, rather than meaning the axes were stretched. */
-  function drawSwing() {
-    var b = swing.burst;
-    if (!b) return;
-
+  function drawSwingPair(sideCv, topCv, b, pos, flip) {
     var span = 0, k, j;
     for (j = 0; j < 3; j++) {
       var lo = Infinity, hi = -Infinity;
@@ -712,7 +833,7 @@
     // tied neither to the forward anchor nor to the flip, and stays put when
     // either changes.
     var sideSign = b.pts[b.pts.length - 1][0] < b.pts[0][0] ? -1 : 1;
-    drawSwingView($("c-side"), b, 0, 2, span, { hSign: sideSign, vSign: 1 });
+    drawSwingView(sideCv, b, 0, 2, span, { hSign: sideSign, vSign: 1 }, pos);
 
     // From above shows direction. The casting axis runs up the page so a
     // forward cast reads as forward, with sideways wander either side of it —
@@ -720,12 +841,12 @@
     // rod went relative to the caster. Looking down the vertical reverses the
     // sideways axis, and flipping forward is a half turn about the vertical,
     // which reverses both.
-    var fwd = swing.flip ? -1 : 1;
-    drawSwingView($("c-top"), b, 1, 0, span,
-                  { hSign: -fwd, vSign: fwd, forward: true });
+    var fwd = flip ? -1 : 1;
+    drawSwingView(topCv, b, 1, 0, span,
+                  { hSign: -fwd, vSign: fwd, forward: true }, pos);
   }
 
-  function drawSwingView(cv, b, hAxis, vAxis, span, o) {
+  function drawSwingView(cv, b, hAxis, vAxis, span, o, pos) {
     var dpr = window.devicePixelRatio || 1;
     var W = cv.clientWidth, H = cv.clientHeight;
     cv.width = W * dpr; cv.height = H * dpr;
@@ -780,8 +901,8 @@
     var c1 = css("--s1"), c2 = css("--s2");
     g.lineWidth = 2.25; g.lineJoin = "round"; g.lineCap = "round";
     b.segs.forEach(function (seg) {
-      if (seg.from > swing.pos) return;
-      var end = Math.min(seg.to, swing.pos);
+      if (seg.from > pos) return;
+      var end = Math.min(seg.to, pos);
       g.strokeStyle = seg.dir > 0 ? c1 : c2;
       g.beginPath();
       for (var k = seg.from; k <= end; k++) {
@@ -791,7 +912,7 @@
     });
 
     // arm, pivot, sensor
-    var p = pts[swing.pos];
+    var p = pts[pos];
     g.strokeStyle = css("--axis"); g.lineWidth = 1.5;
     g.beginPath(); g.moveTo(X([0,0,0]), Y([0,0,0])); g.lineTo(X(p), Y(p)); g.stroke();
 
@@ -847,6 +968,161 @@
       if (swing.pos >= b.pts.length - 1) stopSwing();
     }, 20);
   });
+
+  /* ---------- compare view ---------- */
+  // One entry per column: the session, its reconstruction, and which burst and
+  // forward anchor that column is showing. Columns are independent — comparing
+  // two sessions means picking the burst in each that is worth comparing.
+  var cmp = [];
+
+  function renderCompareGrid() {
+    var grid = $("cmp-grid");
+    grid.innerHTML = "";
+    grid.style.gridTemplateColumns = "repeat(" + sessions.length + ", minmax(0,1fr))";
+    cmp = sessions.map(function (p) { return buildCompareColumn(p, grid); });
+    drawCompare();
+  }
+
+  function buildCompareColumn(p, grid) {
+    var col = document.createElement("div");
+    col.className = "cmpcol";
+    var state = { p: p, rec: null, burst: null, flip: false, side: null, top: null };
+
+    var peak = 0;
+    p.session.readings.forEach(function (r) { var v = A.rateOf(r); if (v > peak) peak = v; });
+    var head = document.createElement("div");
+    head.className = "cmphead";
+    head.innerHTML = '<span class="t">' + escapeHtml(p.session.name) + "</span>" +
+      '<span class="s">' + p.strokes.length + " stroke" +
+      (p.strokes.length === 1 ? "" : "s") + " · " + f(p.session.duration, 1) + " s · peak " +
+      f(peak, 0) + " °/s</span>";
+    col.appendChild(head);
+
+    var spans = A.detectStrokes(p.session.readings);
+    state.rec = spans.length ? window.CastrReconstruct.reconstruct(p.session.readings, spans) : null;
+    var bursts = state.rec ? state.rec.bursts : [];
+    var fitted = bursts.filter(function (b) { return b.ok; });
+
+    if (!fitted.length) {
+      var none = document.createElement("div");
+      none.className = "cmpnone warn";
+      none.textContent = bursts.length
+        ? "No swing path: no burst in this session is rotation about a fixed arm."
+        : "No strokes detected in this session.";
+      col.appendChild(none);
+    } else {
+      var ctl = document.createElement("div");
+      ctl.className = "cmpctl";
+      var k = document.createElement("span");
+      k.className = "ctl-k"; k.textContent = "Burst";
+      var chips = document.createElement("div");
+      chips.className = "chips";
+      chips.setAttribute("role", "group");
+      chips.setAttribute("aria-label", "Burst in " + p.session.name);
+      bursts.forEach(function (b) {
+        var btn = document.createElement("button");
+        btn.type = "button";
+        btn.textContent = String(b.index);
+        btn.disabled = !b.ok;
+        btn.title = b.ok ? b.strokes.length + " strokes at " + f(b.startTime, 1) + " s"
+                         : "not fitted: " + b.reason;
+        btn.addEventListener("click", function () { selectCompareBurst(state, b); });
+        chips.appendChild(btn);
+      });
+      var flip = document.createElement("button");
+      flip.className = "ghost";
+      flip.type = "button";
+      flip.textContent = "Flip forward";
+      flip.setAttribute("aria-label", "Swap which direction counts as forward in " +
+                        p.session.name);
+      flip.addEventListener("click", function () {
+        state.flip = !state.flip;
+        flip.setAttribute("aria-pressed", String(state.flip));
+        drawColumn(state);
+      });
+      ctl.appendChild(k); ctl.appendChild(chips); ctl.appendChild(flip);
+      col.appendChild(ctl);
+
+      state.chips = chips;
+      state.side = addCompareView(col, "Side elevation", "along the swing axis");
+      state.top = addCompareView(col, "From above", "forward is up the page");
+
+      state.facts = document.createElement("div");
+      state.facts.className = "cmpfacts";
+      col.appendChild(state.facts);
+    }
+
+    if (p.strokes.length < 2) {
+      var thin = document.createElement("div");
+      thin.className = "cmpnone";
+      thin.textContent = "Consistency needs at least two strokes.";
+      col.appendChild(thin);
+    } else {
+      var cv = A.repeatabilityCV(p.strokes);
+      var verdict = document.createElement("div");
+      verdict.className = "verdict";
+      verdict.innerHTML = '<span class="big mono">' + (cv === null ? "—" : f(cv, 1) + "%") +
+        '</span><span class="word">' +
+        (cv === null ? "three or more strokes needed" : A.verdict(cv)) + "</span>";
+      col.appendChild(verdict);
+
+      var wrap = document.createElement("div");
+      wrap.className = "tablewrap";
+      wrap.innerHTML = "<table><thead><tr>" +
+        '<th scope="col">Metric</th><th scope="col">Mean</th>' +
+        '<th scope="col">SD</th><th scope="col">CV</th>' +
+        "</tr></thead><tbody>" + spreadRows(p, false) + "</tbody></table>";
+      col.appendChild(wrap);
+    }
+
+    grid.appendChild(col);
+    if (fitted.length) selectCompareBurst(state, fitted[0], true);
+    return state;
+  }
+
+  function addCompareView(col, title, sub) {
+    var view = document.createElement("div");
+    view.className = "view";
+    view.innerHTML = '<div class="viewhead"><span class="t">' + title +
+      '</span><span class="s">' + sub + "</span></div>";
+    var cv = document.createElement("canvas");
+    cv.setAttribute("aria-label", title + " of the swing path");
+    view.appendChild(cv);
+    col.appendChild(view);
+    return cv;
+  }
+
+  function selectCompareBurst(state, b, quiet) {
+    state.burst = b;
+    if (state.chips) {
+      Array.prototype.forEach.call(state.chips.children, function (btn) {
+        btn.setAttribute("aria-pressed", String(Number(btn.textContent) === b.index));
+      });
+    }
+    if (state.facts) {
+      var q = window.CastrReconstruct.quality(b.residual);
+      var facts = [
+        "burst <b>" + b.index + "</b>",
+        "strokes <b>" + b.strokes.length + "</b>",
+        "arm <b>" + f(b.armCm, 1) + " cm</b>",
+        "out of plane <b>" + f(b.outOfPlaneCm, 1) + " cm</b>",
+        "<b>" + q + "</b> fit (" + f(b.residual, 2) + ")"
+      ];
+      if (!b.grounded) facts.push('<span class="warn">orientation not anchored</span>');
+      state.facts.innerHTML = facts.map(function (t) { return "<span>" + t + "</span>"; }).join("");
+    }
+    if (!quiet) drawColumn(state);
+  }
+
+  // The whole burst is drawn, not a playhead sweep: a still comparison is what
+  // the columns are for, so every stroke in the chosen burst is coloured in.
+  function drawColumn(state) {
+    if (!state.burst || !state.side) return;
+    drawSwingPair(state.side, state.top, state.burst,
+                  state.burst.pts.length - 1, state.flip);
+  }
+
+  function drawCompare() { cmp.forEach(drawColumn); }
 
   /* ---------- trace ---------- */
   function drawTrace() {
@@ -910,7 +1186,9 @@
   var raf;
   window.addEventListener("resize", function () {
     cancelAnimationFrame(raf);
-    raf = requestAnimationFrame(function () { drawTrace(); drawSwing(); });
+    raf = requestAnimationFrame(function () {
+      if (mode === "compare") drawCompare(); else { drawTrace(); drawSwing(); }
+    });
   });
 })();
 </script>
