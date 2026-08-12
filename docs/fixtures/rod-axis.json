@@ -1,0 +1,84 @@
+{
+  "note": "Ground truth from CastrCore/MountCalibration.swift, which is the authority. docs/reconstruct.js carries a mirror of it and must reproduce these. Regenerate with: swift run castr-selftest --emit-axis-fixture docs/fixtures/rod-axis.json",
+  "trueAxisBody": [0.309984501162, -0.359982001350, -0.879956003300],
+  "maxSpreadDeg": 20.0,
+  "cases": [
+    {
+      "name": "clean, two vertical holds",
+      "vertical": [[0.309984501162, -0.359982001350, -0.879956003300], [0.309984501162, -0.359982001350, -0.879956003300]],
+      "level": [[0.000000000000, -0.925546956206, 0.378632845721]],
+      "ok": true,
+      "axis": [0.309984501162, -0.359982001350, -0.879956003300],
+      "errorDeg": 0.000000000000,
+      "levelCheckDeg": 0.000000000000,
+      "levelSpreadDeg": null
+    },
+    {
+      "name": "consistent lean, invisible to the error bar",
+      "vertical": [[0.309229394497, -0.423667995237, -0.851400382541], [0.309229394497, -0.423667995237, -0.851400382541]],
+      "level": [[0.000000000000, -0.925546956206, 0.378632845721]],
+      "ok": true,
+      "axis": [0.309229394497, -0.423667995237, -0.851400382541],
+      "errorDeg": 0.000000000000,
+      "levelCheckDeg": 4.000000000000,
+      "levelSpreadDeg": null
+    },
+    {
+      "name": "holds 6° apart, averaged",
+      "vertical": [[0.309559678177, -0.407928043529, -0.858933942134], [0.309559678177, -0.311049273527, -0.898566166225]],
+      "level": [[0.000000000000, -0.925546956206, 0.378632845721]],
+      "ok": true,
+      "axis": [0.309984501162, -0.359982001350, -0.879956003300],
+      "errorDeg": 3.000000000000,
+      "levelCheckDeg": 0.000000000000,
+      "levelSpreadDeg": null
+    },
+    {
+      "name": "level hold out of level — reported, not refused",
+      "vertical": [[0.309984501162, -0.359982001350, -0.879956003300], [0.309984501162, -0.359982001350, -0.879956003300]],
+      "level": [[-0.069731340367, -0.820846916931, 0.566875541133]],
+      "ok": true,
+      "axis": [0.309984501162, -0.359982001350, -0.879956003300],
+      "errorDeg": 0.000000000000,
+      "levelCheckDeg": 13.000000000000,
+      "levelSpreadDeg": null
+    },
+    {
+      "name": "housing clocked 40° about the blank",
+      "vertical": [[0.309984501162, -0.359982001350, -0.879956003300], [0.309984501162, -0.359982001350, -0.879956003300]],
+      "level": [[-0.611124926940, -0.784454286106, 0.105630472326]],
+      "ok": true,
+      "axis": [0.309984501162, -0.359982001350, -0.879956003300],
+      "errorDeg": 0.000000000000,
+      "levelCheckDeg": 0.000000000000,
+      "levelSpreadDeg": null
+    },
+    {
+      "name": "two level holds, rod rolled between them",
+      "vertical": [[0.309984501162, -0.359982001350, -0.879956003300], [0.309984501162, -0.359982001350, -0.879956003300]],
+      "level": [[0.000000000000, -0.925546956206, 0.378632845721], [-0.246070035647, -0.924387380985, 0.291474711482]],
+      "ok": true,
+      "axis": [0.309984501162, -0.359982001350, -0.879956003300],
+      "errorDeg": 0.000000000000,
+      "levelCheckDeg": 0.000000000000,
+      "levelSpreadDeg": 15.000000000000
+    },
+    {
+      "name": "one vertical hold only, so no error bar",
+      "vertical": [[0.309984501162, -0.359982001350, -0.879956003300]],
+      "level": [[0.000000000000, -0.925546956206, 0.378632845721]],
+      "ok": true,
+      "axis": [0.309984501162, -0.359982001350, -0.879956003300],
+      "errorDeg": null,
+      "levelCheckDeg": 0.000000000000,
+      "levelSpreadDeg": null
+    },
+    {
+      "name": "vertical holds too far apart",
+      "vertical": [[0.302039618480, -0.558958449620, -0.772228930089], [0.302039618480, -0.142552922334, -0.942576645797]],
+      "level": [[0.000000000000, -0.925546956206, 0.378632845721]],
+      "ok": false,
+      "reason": "the two tip-at-sky holds are 26.0° apart"
+    }
+  ]
+}

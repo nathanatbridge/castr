@@ -11,6 +11,11 @@
  * sequence into one blob. This works from the strokes analysis.js already
  * detected, and reconstructs a whole burst at once so the back-and-forward
  * alternation is visible as one continuous path.
+ *
+ * Given the rod's geometry it also draws the tip, which is the same rigid body
+ * further out along the blank — measured constants, no new estimator. That tip
+ * is where the tip would be if the blank were rigid, and a fly rod is not. See
+ * ROD-TIP.md.
  */
 (function (root) {
   "use strict";
@@ -76,6 +81,115 @@
       }
     }
     return [M[0][3]/M[0][0], M[1][3]/M[1][1], M[2][3]/M[2][2]];
+  }
+
+  /* ---------- rod geometry ----------
+
+     Mirror of CastrCore/MountCalibration.swift, which is the authority. Kept
+     here because this is where it gets consumed, and checked against the same
+     fixture by tools/verify-reconstruction.js. */
+
+  /* Rod axis in the sensor's frame, from the tip-at-sky holds.
+
+     Stand the blank vertical and gravity runs along it, so a resting sensor
+     reads the butt-to-tip direction outright. The pose is repeated at both ends
+     of the sequence and the disagreement between the repeats is the error bar —
+     the only figure here that measures the axis alone.
+
+     The level hold is not a check on the axis. It cannot separate its own tilt
+     from the axis it is checking, so its squareness is reported and never gated
+     on. CALIBRATION.md §2 has the captures that forced that. */
+  function rodAxis(vertical, level, maxSpreadDeg) {
+    var maxDeg = maxSpreadDeg === undefined ? DEFAULTS.maxAxisSpreadDeg : maxSpreadDeg;
+    var ups = [], i, j, u;
+    for (i = 0; i < (vertical || []).length; i++) {
+      u = unit(vertical[i]);
+      if (!u) return { ok: false, reason: "a hold vector has no length" };
+      ups.push(u);
+    }
+    if (!ups.length) {
+      return { ok: false, reason: "no tip-at-sky hold to measure the axis from" };
+    }
+
+    var spread = 0;
+    for (i = 0; i < ups.length; i++) {
+      for (j = i + 1; j < ups.length; j++) {
+        spread = Math.max(spread, angleDeg(ups[i], ups[j]));
+      }
+    }
+    if (ups.length >= 2 && !(spread <= maxDeg)) {
+      return { ok: false,
+               reason: "the two tip-at-sky holds are " + spread.toFixed(1) + "° apart",
+               spreadDeg: spread };
+    }
+
+    var sum = [0, 0, 0];
+    for (i = 0; i < ups.length; i++) {
+      sum[0] += ups[i][0]; sum[1] += ups[i][1]; sum[2] += ups[i][2];
+    }
+    var axis = unit(sum);
+    if (!axis) return { ok: false, reason: "a hold vector has no length" };
+
+    var levels = [];
+    for (i = 0; i < (level || []).length; i++) {
+      u = unit(level[i]);
+      if (!u) return { ok: false, reason: "a hold vector has no length" };
+      levels.push(u);
+    }
+    var check = 0;
+    for (i = 0; i < levels.length; i++) {
+      check = Math.max(check, Math.abs(90 - angleDeg(axis, levels[i])));
+    }
+    var lspread = 0;
+    for (i = 0; i < levels.length; i++) {
+      for (j = i + 1; j < levels.length; j++) {
+        lspread = Math.max(lspread, angleDeg(levels[i], levels[j]));
+      }
+    }
+    return { ok: true, axis: axis,
+             errorDeg: ups.length >= 2 ? spread / 2 : null,
+             levelCheckDeg: levels.length ? check : null,
+             levelSpreadDeg: levels.length >= 2 ? lspread : null };
+  }
+
+  /* Resolves the caller's rod option into a length and an axis, or a reason it
+     cannot. Either the axis is supplied directly, or the two hold vectors are
+     and it is solved here. */
+  function resolveRod(rod) {
+    if (!rod) return null;
+    var L = rod.tipFromSensorM;
+    if (!(typeof L === "number" && isFinite(L) && L > 0)) {
+      return { ok: false, reason: "sensor-to-tip distance is not set" };
+    }
+    if (rod.axisBody) {
+      var a = unit(rod.axisBody);
+      if (!a) return { ok: false, reason: "rod axis has no length" };
+      return { ok: true, L: L, axis: a,
+               uncertaintyDeg: rod.axisUncertaintyDeg || 0 };
+    }
+    if (rod.holds && rod.holds.vertical && rod.holds.vertical.length) {
+      var solved = rodAxis(rod.holds.vertical, rod.holds.level, rod.maxAxisSpreadDeg);
+      if (!solved.ok) return { ok: false, reason: solved.reason };
+      // A single hold has no error bar, and saying "0" would be a lie. The tip
+      // still draws; the uncertainty is simply reported as unknown.
+      return { ok: true, L: L, axis: solved.axis,
+               uncertaintyDeg: solved.errorDeg, uncertaintyKnown: solved.errorDeg !== null };
+    }
+    return { ok: false, reason: "no rod axis and no calibration holds" };
+  }
+
+  function unit(v) {
+    if (!v || v.length !== 3) return null;
+    var n = Math.sqrt(v[0]*v[0] + v[1]*v[1] + v[2]*v[2]);
+    if (!(n > 1e-12) || !isFinite(n)) return null;
+    return [v[0]/n, v[1]/n, v[2]/n];
+  }
+
+  /* Both arguments must already be unit vectors. Clamped because a dot product
+     of two of them can land a hair outside [-1, 1] and acos returns NaN there. */
+  function angleDeg(a, b) {
+    var dot = a[0]*b[0] + a[1]*b[1] + a[2]*b[2];
+    return Math.acos(Math.min(1, Math.max(-1, dot))) * 180 / Math.PI;
   }
 
   /* ---------- helpers over the readings ---------- */
@@ -145,7 +259,7 @@
 
   /* ---------- the reconstruction ---------- */
 
-  function reconstructBurst(readings, spans, strokeIdx, bias, opts) {
+  function reconstructBurst(readings, spans, strokeIdx, bias, opts, rod) {
     var i0 = spans[strokeIdx[0]][0];
     var i1 = spans[strokeIdx[strokeIdx.length - 1]][1] - 1;
 
@@ -300,10 +414,19 @@
     }
     var theta = 0.5*Math.atan2(2*sxy, sxx - syy);
     var ct = Math.cos(-theta), st = Math.sin(-theta);
-    var pts = [];
-    for (k = 0; k < n; k++) {
-      pts.push([raw[k][0]*ct - raw[k][1]*st, raw[k][0]*st + raw[k][1]*ct, raw[k][2]]);
+
+    // The heading rotation and the sign flip below are together the burst's
+    // frame. Everything drawn for this burst goes through this one map: the
+    // tip path is the same rigid body as the sensor path, so drawing it in a
+    // frame that had drifted from the sensor's would be worse than not drawing
+    // it at all.
+    var flip = 1;
+    function toFrame(v) {
+      return [flip*(v[0]*ct - v[1]*st), flip*(v[0]*st + v[1]*ct), v[2]];
     }
+
+    var pts = [];
+    for (k = 0; k < n; k++) pts.push(toFrame(raw[k]));
 
     // Which end of that axis is "forward" is not in the data. Gravity fixes
     // which way is up but leaves the heading free, so the swing axis comes out
@@ -332,7 +455,57 @@
 
     // The first travelling stroke goes back, so it should sweep toward -X.
     if (anchor > 0) {
+      flip = -1;
       for (k = 0; k < n; k++) { pts[k][0] = -pts[k][0]; pts[k][1] = -pts[k][1]; }
+    }
+
+    // The rod tip, when the rod's geometry is known.
+    //
+    // The tip is a point on the same rigid body as the sensor, further out
+    // along the blank: tip = R(t)·(r_body + L·axis). Nothing here is integrated
+    // and nothing is fitted — L is a tape measure and the axis is a pair of
+    // calibration holds — so the tip adds no estimator of its own. It inherits
+    // this burst's orientation error and multiplies it by the ratio of the two
+    // radii, which for a 9 ft rod is about eleven. ROD-TIP.md §2.
+    //
+    // What comes out is the *rigid-blank* tip: where the tip would be if the
+    // blank did not bend. It does bend, by tens of centimetres under load, and
+    // nothing in this file models that. Layer 2 in ROD-TIP.md §3 is that job.
+    var tip = null;
+    if (rod) {
+      if (!rod.ok) {
+        tip = { ok: false, reason: rod.reason };
+      } else if (!grounded) {
+        // Eleven times the amplification is what makes this a refusal here and
+        // not for the sensor path. A few degrees of tilt from an unanchored
+        // gravity reference is millimetres at the sensor and centimetres of
+        // invented arc height at the tip — and arc height is the number a
+        // caster would read off the drawing.
+        tip = { ok: false,
+                reason: "orientation is not anchored — no still window before the burst" };
+      } else {
+        var rTip = [rBody[0] + rod.L*rod.axis[0],
+                    rBody[1] + rod.L*rod.axis[1],
+                    rBody[2] + rod.L*rod.axis[2]];
+        var tipPts = [];
+        for (k = 0; k < n; k++) tipPts.push(toFrame(qrot(quats[k], rTip)));
+        var txs = tipPts.map(function (p) { return p[0]; });
+        var tys = tipPts.map(function (p) { return p[1]; });
+        var tzs = tipPts.map(function (p) { return p[2]; });
+        tip = {
+          ok: true,
+          pts: tipPts,
+          radiusCm: Math.sqrt(rTip[0]*rTip[0] + rTip[1]*rTip[1] + rTip[2]*rTip[2])*100,
+          extentCm: (Math.max.apply(null, txs) - Math.min.apply(null, txs))*100,
+          outOfPlaneCm: (Math.max.apply(null, tys) - Math.min.apply(null, tys))*100,
+          riseCm: (Math.max.apply(null, tzs) - Math.min.apply(null, tzs))*100,
+          // What the calibration's own error bar is worth out here. Reported
+          // rather than folded in, because it is a property of the calibration
+          // and not of this burst.
+          axisUncertaintyCm: rod.uncertaintyDeg === null || rod.uncertaintyDeg === undefined
+            ? null : (rod.uncertaintyDeg*Math.PI/180)*rod.L*100
+        };
+      }
     }
 
     var xs = pts.map(function (p) { return p[0]; });
@@ -387,7 +560,7 @@
         if (pts[kk][1] < lo) lo = pts[kk][1];
         if (pts[kk][1] > hi) hi = pts[kk][1];
       }
-      return {
+      var seg = {
         stroke: si,
         from: from,
         to: to,
@@ -398,6 +571,20 @@
         outOfPlaneCm: (hi - lo)*100,
         residual: sd > 0 ? Math.sqrt(sn/sd) : null
       };
+
+      // Out-of-plane at the tip is tracking, which is the version of this
+      // number a caster is actually taught. At the sensor it is millimetres
+      // and illegible.
+      if (tip && tip.ok) {
+        var tlo = tip.pts[from][1], thi = tip.pts[from][1];
+        for (kk = from; kk <= to; kk++) {
+          if (tip.pts[kk][1] < tlo) tlo = tip.pts[kk][1];
+          if (tip.pts[kk][1] > thi) thi = tip.pts[kk][1];
+        }
+        seg.tipSweepCm = Math.abs(tip.pts[to][0] - tip.pts[from][0])*100;
+        seg.tipOutOfPlaneCm = (thi - tlo)*100;
+      }
+      return seg;
     });
 
     return {
@@ -413,7 +600,10 @@
       extentCm: extent,
       outOfPlaneCm: outOfPlane,
       grounded: grounded,
-      fitSamples: used
+      fitSamples: used,
+      // null when no rod geometry was supplied — an absent tip path, not a
+      // guessed one.
+      tip: tip
     };
   }
 
@@ -435,7 +625,12 @@
     // Ridge weight, relative to the mean diagonal of the normal equations.
     // Small enough not to bias the observable directions, large enough to pin
     // the unobservable one to zero instead of to noise.
-    ridge: 1e-4
+    ridge: 1e-4,
+    // How far the two tip-at-sky holds may disagree before the capture is
+    // treated as not having been performed. Deliberately loose — the pose
+    // repeated across whole sessions on 2026-08-11 held to 3-9°, and two holds
+    // inside one sequence should do better. Matches MountCalibration.swift.
+    maxAxisSpreadDeg: 20.0
   };
 
   /* How much of the motion the rigid-arm model actually explains. */
@@ -447,15 +642,29 @@
   }
 
   /* Reconstructs every burst in a session.
-     `spans` are [lo, hi) index pairs from CastrAnalysis.detectStrokes. */
+     `spans` are [lo, hi) index pairs from CastrAnalysis.detectStrokes.
+
+     `options.rod` turns on the tip path. It needs a sensor-to-tip distance in
+     metres plus an axis — either `axisBody` directly, or the `holds` from a
+     calibration JSON to solve one from:
+
+       { tipFromSensorM: 2.44, holds: { down: [...], up: [...] } }
+
+     Leave it out and no tip is reported. There is deliberately no fallback that
+     guesses the axis from the fitted arm: the pivot is not on the rod's
+     centreline and it moves during a cast, so that would be a guess wearing a
+     measurement's clothes. */
   function reconstruct(readings, spans, options) {
     var o = Object.assign({}, DEFAULTS, options || {});
+    var rod = resolveRod(o.rod);
     var bias = gyroBias(readings);
-    if (!spans.length) return { bias: bias.bias, stillSamples: bias.samples, bursts: [] };
+    if (!spans.length) {
+      return { bias: bias.bias, stillSamples: bias.samples, bursts: [], rod: rod };
+    }
 
     var groups = groupBursts(readings, spans, o.burstGapSeconds);
     var bursts = groups.map(function (g, i) {
-      var r = reconstructBurst(readings, spans, g, bias.bias, o);
+      var r = reconstructBurst(readings, spans, g, bias.bias, o, rod);
       r.index = i + 1;
       r.startTime = readings[spans[g[0]][0]].t - readings[0].t;
       return r;
@@ -464,7 +673,10 @@
       bias: bias.bias,
       biasDegPerSec: bias.bias.slice(),
       stillSamples: bias.samples,
-      bursts: bursts
+      bursts: bursts,
+      // The resolved rod geometry, or the reason there is none. Null when the
+      // caller never asked for a tip path.
+      rod: rod
     };
   }
 
@@ -473,6 +685,7 @@
     groupBursts: groupBursts,
     gyroBias: gyroBias,
     quality: quality,
+    rodAxis: rodAxis,
     DEFAULTS: DEFAULTS,
     _internals: { qmul: qmul, qrot: qrot, qAlign: qAlign, solve3: solve3 }
   };

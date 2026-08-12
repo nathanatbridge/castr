@@ -91,7 +91,7 @@ if let flagIndex = args.firstIndex(of: "--emit-csv") {
     // accelerometer reads is gravity plus the centripetal and tangential terms
     // of turning: a = g_body + (w x (w x r) + alpha x r) / G. Ground truth for
     // tools/verify-reconstruction.js, which has to recover ARM_M from the CSV.
-    let armBody = [0.08, -0.10, -0.26]        // 29.0 cm from the pivot
+    let armBody = FixtureRod.armBody          // 29.0 cm from the pivot
     let gravity = 9.80665
     let deg = Double.pi / 180
 
@@ -164,6 +164,126 @@ if let flagIndex = args.firstIndex(of: "--emit-csv") {
     }
 }
 
+// `--emit-axis-fixture <path>` writes the pose vectors a calibration would
+// store, together with the axis Swift solves from them. MountCalibration is a
+// pure function of three vectors, so it needs no CSV — but the browser has its
+// own copy of it in reconstruct.js, and two implementations of the same maths
+// drift unless something checks. This is the parity mechanism for that pair,
+// standing in for `castr-analyze --json` which has no calibration input.
+if let flagIndex = args.firstIndex(of: "--emit-axis-fixture") {
+    guard flagIndex + 1 < args.count else {
+        print("usage: castr-selftest --emit-axis-fixture <path>")
+        exit(2)
+    }
+    let path = args[flagIndex + 1]
+
+    // The same rod axis the CSV fixture's tip ground truth uses, so the two
+    // fixtures describe one rod rather than two.
+    let axis = FixtureRod.axisBody
+    func rotate(_ v: [Double], about k: [Double], deg: Double) -> [Double] {
+        let t = deg * .pi / 180, c = cos(t), s = sin(t)
+        let dot = k[0]*v[0] + k[1]*v[1] + k[2]*v[2]
+        let cx = [k[1]*v[2] - k[2]*v[1], k[2]*v[0] - k[0]*v[2], k[0]*v[1] - k[1]*v[0]]
+        return (0..<3).map { v[$0]*c + cx[$0]*s + k[$0]*dot*(1 - c) }
+    }
+    func unit(_ v: [Double]) -> [Double] {
+        let n = (v[0]*v[0] + v[1]*v[1] + v[2]*v[2]).squareRoot()
+        return v.map { $0 / n }
+    }
+    func cross(_ a: [Double], _ b: [Double]) -> [Double] {
+        [a[1]*b[2] - a[2]*b[1], a[2]*b[0] - a[0]*b[2], a[0]*b[1] - a[1]*b[0]]
+    }
+    // What a level hold reads: the sensor's up direction, square to the blank.
+    let seed: [Double] = abs(axis[0]) < 0.9 ? [1, 0, 0] : [0, 1, 0]
+    let level = unit([axis[1]*seed[2] - axis[2]*seed[1],
+                      axis[2]*seed[0] - axis[0]*seed[2],
+                      axis[0]*seed[1] - axis[1]*seed[0]])
+
+    struct Case {
+        let name: String
+        let vertical: [[Double]]
+        let level: [[Double]]
+    }
+    let cases = [
+        Case(name: "clean, two vertical holds", vertical: [axis, axis], level: [level]),
+        // Both holds leaning the same way agree and are both wrong. Kept in the
+        // fixture so both ports have to reproduce a clean bar over a bad axis.
+        Case(name: "consistent lean, invisible to the error bar",
+             vertical: [rotate(axis, about: cross(axis, level), deg: 4),
+                        rotate(axis, about: cross(axis, level), deg: 4)],
+             level: [level]),
+        Case(name: "holds 6° apart, averaged",
+             vertical: [rotate(axis, about: cross(axis, level), deg: 3),
+                        rotate(axis, about: cross(axis, level), deg: -3)],
+             level: [level]),
+        Case(name: "level hold out of level — reported, not refused",
+             vertical: [axis, axis],
+             level: [rotate(level, about: cross(axis, level), deg: 13)]),
+        Case(name: "housing clocked 40° about the blank",
+             vertical: [axis, axis],
+             level: [rotate(level, about: axis, deg: 40)]),
+        Case(name: "two level holds, rod rolled between them",
+             vertical: [axis, axis],
+             level: [level, rotate(level, about: axis, deg: 15)]),
+        Case(name: "one vertical hold only, so no error bar",
+             vertical: [axis], level: [level]),
+        Case(name: "vertical holds too far apart",
+             vertical: [rotate(axis, about: cross(axis, level), deg: 13),
+                        rotate(axis, about: cross(axis, level), deg: -13)],
+             level: [level])
+    ]
+
+    func vec(_ v: [Double]) -> String {
+        "[" + v.map { String(format: "%.12f", $0) }.joined(separator: ", ") + "]"
+    }
+    func vecs(_ vs: [[Double]]) -> String {
+        "[" + vs.map { vec($0) }.joined(separator: ", ") + "]"
+    }
+    func num(_ d: Double?) -> String {
+        guard let d else { return "null" }
+        return String(format: "%.12f", d)
+    }
+    var rows: [String] = []
+    for c in cases {
+        let outcome = MountCalibration.rodAxis(vertical: c.vertical, level: c.level)
+        var fields = ["      \"name\": \"\(c.name)\"",
+                      "      \"vertical\": \(vecs(c.vertical))",
+                      "      \"level\": \(vecs(c.level))"]
+        switch outcome {
+        case .measured(let a):
+            fields.append("      \"ok\": true")
+            fields.append("      \"axis\": \(vec(a.axis))")
+            fields.append("      \"errorDeg\": \(num(a.errorDeg))")
+            fields.append("      \"levelCheckDeg\": \(num(a.levelCheckDeg))")
+            fields.append("      \"levelSpreadDeg\": \(num(a.levelSpreadDeg))")
+        case .refused(let why):
+            fields.append("      \"ok\": false")
+            fields.append("      \"reason\": \"\(why.reason)\"")
+        }
+        rows.append("    {\n" + fields.joined(separator: ",\n") + "\n    }")
+    }
+
+    let text = """
+    {
+      "note": "Ground truth from CastrCore/MountCalibration.swift, which is the authority. docs/reconstruct.js carries a mirror of it and must reproduce these. Regenerate with: swift run castr-selftest --emit-axis-fixture docs/fixtures/rod-axis.json",
+      "trueAxisBody": \(vec(axis)),
+      "maxSpreadDeg": \(MountCalibration.maxSpreadDeg),
+      "cases": [
+    \(rows.joined(separator: ",\n"))
+      ]
+    }
+
+    """
+    do {
+        try text.write(toFile: path, atomically: true, encoding: .utf8)
+        print("Wrote \(cases.count) axis cases to \(path)")
+        exit(0)
+    } catch {
+        print("error: \(error)")
+        exit(1)
+    }
+}
+
 print("castr-selftest — parser and CSV checks, no hardware required\n")
 
 runFrameParserTests()
@@ -171,6 +291,8 @@ print("")
 runCSVTests()
 print("")
 runStaticCheckTests()
+print("")
+runMountCalibrationTests()
 print("")
 runSaturationTests()
 print("")
