@@ -10,20 +10,49 @@ cast protocol      # prints this card
 
 ## Order of operations
 
-| # | when | command |
-|---|---|---|
-| 1 | first time this person is recorded, ever | `cast profile <person>` |
-| 2 | start of every session, and after any remount | `cast calibrate` |
-| 3 | each recording | `cast <person> <test>` |
+```
+cast <person> <test>
+```
 
-Step 3 runs the sensor health check itself and prompts for step 2 if today's poses are
-missing, so on a normal day you only ever type step 3.
+That is the whole thing. It runs the setup it needs and skips what is already
+done:
+
+| | what it does | when it runs |
+|---|---|---|
+| 1 | sensor health check | every time |
+| 2 | **profile** — three typed answers | first time this person is recorded |
+| 3 | **rod** — which rod is on the line | **every time**, asked when you own more than one |
+| 4 | **calibration** — the 30 s pose sequence | first recording of the day **for this caster** |
+| 5 | the recording | every time |
+
+So the first session with a new person costs about a minute of setup, and every
+one after it is the health check, the rod, and the protocol card. Steps 2–4 are
+still available on their own — `cast profile <person>`, `cast rod <name>`,
+`cast calibrate [person]` — for redoing one without the others, which is what
+you want after moving the mount.
+
+**Calibration is per caster, not per day.** A second person picking up the same
+rod on the same afternoon gets their own. The mount half would have carried over
+fine; the two swings would not, because they are shoulder rotations and they
+belong to whoever performed them. `cast` says exactly that when it happens.
+
+**The rod is asked every session, and its numbers are copied into the session.**
+The same model comes in several lengths and they are different levers, so a rod
+is `trace9` and `trace86`, not `trace` — `cast rod` refuses to quietly rewrite
+one rod's length with another's. Which rod was in your hand is unrecoverable a
+week later, so it goes in `Sessions/<name>.session.json` along with the caster,
+at capture time.
+
+**Step 4 is doing three jobs at once.** It fixes how the housing sits on the
+blank, it measures the rod axis the tip projection needs, and its two swings are
+the arm rotations that used to be captured separately in the profile. That is why
+skipping it costs more than it used to: no re-referencing, and no rod tip path.
 
 ---
 
 ## 1. `cast profile <person>` — once per person
 
-Three typed answers, then one optional motion capture.
+Three typed answers. No capture — it takes about twenty seconds.
 
 | prompt | what to put in |
 |---|---|
@@ -36,29 +65,31 @@ data, but only if it can be told apart from a sensor fault. Its absence is curre
 named gap in the corpus — Sam's arcs run 24% wider than everyone else's and there is no
 way to tell practice from inexperience.
 
-Then the **shoulder sweep** (optional — press `s` at the prompt to skip). It runs as three
-timed steps, same as `cast calibrate`: the screen tells them when to move and when to stop.
-
-> "Let your casting arm hang straight down at your side, with the rod lined up along your
-> arm. Hold it there. When I say raise, bring the rod straight out in front of you to
-> shoulder height — one smooth movement, pivoting at the shoulder only — and hold it there.
-> I'll tell you when to move and when to stop."
-
-| | | |
-|---|---|---|
-| 1 | arm down at your side | hold 4 s |
-| 2 | **raise** out in front to shoulder height | 4 s — this is the measurement |
-| 3 | arm out at shoulder height | hold 4 s |
-
-Step 2 is the part being measured; the two holds bracket it and give the gravity reference
-at each end. Keep the elbow out of it and don't let the trunk lean in — either one is a
-second pivot and corrupts the number.
-
-Afterwards you get `[Enter] keep it  [r] do it again  [s] skip`. Redo it freely: stillness
-is all the software can check, and whether they bent the elbow or stopped short of shoulder
-height is visible only to you.
+The shoulder sweep that used to live here is gone. `cast calibrate` steps 2 and 4 are the
+same shoulder rotation at the same radius, so it was being captured twice — see
+`CALIBRATION.md` §3 for what that does and does not cost.
 
 Writes `calibration/profile-<person>.json`.
+
+---
+
+## 1b. `cast rod <name>` — once per rod
+
+Two answers, one of them usually just Enter.
+
+| prompt | what to put in |
+|---|---|
+| `Make, model, length, line weight (free text):` | `Redington Trace 9ft 5wt` |
+| `Rod length, butt cap to tip (9ft / 274cm):` | `9ft`, `9ft6`, `9'6"`, `274cm` or `108in`. A bare number is refused — 9 and 274 are the same rod. |
+| `Butt cap to sensor [Enter for 8in]:` | Enter. The mount is standardised at 8 in. |
+
+**The 8 in standard is an instruction, not an observation.** Nothing can check where you
+actually clamped the sensor, so mount it at 8 in from the butt cap to the middle of the
+housing, every time — `CAPTURE.md` already asks for the same spot every session and this
+just names the spot. Give a number instead only if a rod genuinely cannot take it there.
+
+Without this file there is no rod tip path, however good the calibration is. Writes
+`calibration/rod-<name>.json` and points `current-rod.json` at it.
 
 ---
 
@@ -70,14 +101,14 @@ never have to time anything or press Enter mid-sequence.
 
 Read out to whoever is holding the rod:
 
-> "Hold the rod down at your side, arm hanging straight down, rod lined up along your arm.
+> "Raise the rod straight up, arm extended, tip at the sky. Sight along the blank.
 > Stay still until I tell you to swing."
 
 Press Enter once they're in position and still. From there the screen drives it:
 
 | | | |
 |---|---|---|
-| 1 | rod down at your side, arm hanging | hold 5 s |
+| 1 | arm straight up, rod tip at the sky | hold 5 s |
 | 2 | **swing up** — one smooth movement | the swing is measured too |
 | 3 | arm straight up, rod tip at the sky | hold 5 s |
 | 4 | bring the rod down to point forward | |

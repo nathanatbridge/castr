@@ -30,11 +30,24 @@ head1() { printf '\n%s%s%s\n' "$bold" "$*" "$off"; }
 warn() { printf '%s%s%s\n' "$yellow" "$*" "$off"; }
 die()  { printf '%s%s%s\n' "$red" "$*" "$off" >&2; exit 1; }
 
+# Normalises a name typed at a prompt: drops surrounding quotes and any
+# whitespace, lowercases the rest.
+#
+# People type 'trace9' with the quotes, or paste a name with a trailing space,
+# and neither is a different rod. Rejecting those was technically correct and
+# practically useless — the point of validating is to keep filenames sane, not
+# to make someone retype something that was already unambiguous.
+clean_name() {
+    printf '%s' "${1:-}" | tr -d "\"'" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]'
+}
+
 usage() {
     cat <<'EOF'
-cast <person> <test>      record a session
-cast calibrate            mount poses — start of session, and after any remount
-cast profile <person>     per-person reference measurements — once, not per session
+cast <person> <test>      record a session — health check, setup, poses, collect
+  --no-calibrate          reuse today's poses instead of running them again
+cast calibrate [person]   mount poses — start of session, per caster, after any remount
+cast profile <person>     height, experience, rod — three typed answers, once per person
+cast rod <name>           rod geometry for the tip projection — once per rod
 cast check                health check only, no recording
 cast list                 what has been recorded so far
 cast protocol             the field card — what to type at every prompt
@@ -125,118 +138,6 @@ STILL_WARN_DPS=5
 GRAV_FAIL_G=0.10
 GRAV_WARN_G=0.03
 
-POSE_SECONDS=5
-
-# Records one still pose and gates it. Returns 1 if the pose is unusable.
-#
-# The window is measured in *data*, not wall clock: castr-collect's --seconds
-# starts counting at launch, so scanning and connecting would silently eat most
-# of a 5 s pose. Collector.swift makes exactly this point about --check, which
-# starts its clock on the first sample; --seconds never got the same treatment.
-# So this watches the CSV grow and stops the recorder once the samples are in,
-# which also gives an honest countdown to hold still against.
-capture_pose() {
-    local label="$1" file="$2" spoken="$3"
-    # The sweep is a motion, not a pose, so it needs the opposite prompt order.
-    local prompt="${4:-Press Enter once it is still and hands are off.}"
-
-    head1 "$label"
-    say ""
-    say "  ${dim}Read this out:${off}"
-    printf '%s\n' "$spoken"
-    say ""
-    printf '  %s%s%s ' "$bold" "$prompt" "$off"
-    read -r _
-
-    local target=$(( RATE * POSE_SECONDS ))
-    local rows=0 ticks=0 flowing=0
-
-    trap '' INT
-    # A generous ceiling only — the SIGTERM below is what actually ends it, and
-    # castr-collect's own handler flushes and closes the CSV cleanly.
-    # TERM not INT: a shell sets SIGINT to ignored in background commands, so
-    # `kill -INT` here is silently dropped. Collector handles both identically.
-    "$COLLECT" -o "$file" --despike --rate "$RATE" --seconds 60 --no-tags >/dev/null 2>&1 &
-    local pid=$!
-
-    while kill -0 "$pid" 2>/dev/null; do
-        if [ -e "$file" ]; then rows=$(wc -l < "$file" | tr -d ' '); else rows=0; fi
-        [ "$rows" -gt 1 ] && rows=$(( rows - 1 )) || rows=0
-
-        if [ "$rows" -ge "$target" ]; then
-            kill -TERM "$pid" 2>/dev/null
-            break
-        fi
-
-        if [ "$rows" -eq 0 ]; then
-            printf '\r\033[2K  %sConnecting to the sensor…%s' "$dim" "$off"
-            ticks=$(( ticks + 1 ))
-            # ~20 s with no sample at all means it is never coming.
-            if [ "$ticks" -gt 100 ]; then
-                kill -TERM "$pid" 2>/dev/null
-                break
-            fi
-        else
-            flowing=1
-            local filled=$(( rows * 24 / target )) bar= i=0
-            while [ $i -lt 24 ]; do
-                [ $i -lt $filled ] && bar="$bar#" || bar="$bar."
-                i=$(( i + 1 ))
-            done
-            printf '\r\033[2K  %sHOLD STILL%s  [%s]  %ds' \
-                "$bold" "$off" "$bar" $(( (target - rows + RATE - 1) / RATE ))
-        fi
-        sleep 0.2
-    done
-
-    wait "$pid" 2>/dev/null
-    trap - INT
-    stty sane 2>/dev/null
-    printf '\r\033[2K'
-
-    if [ "$flowing" -eq 0 ] || [ ! -s "$file" ]; then
-        warn "  Nothing recorded — the sensor never connected."
-        warn "  Check it is on and charged, and that Bluetooth is allowed for this terminal."
-        return 1
-    fi
-
-    set -- $(pose_stats "$file")
-    POSE_N=$1; POSE_X=$2; POSE_Y=$3; POSE_Z=$4; POSE_MAG=$5; POSE_GMEAN=$6; POSE_GPEAK=$7
-
-    # Three seconds of data is the floor a still pose is worth trusting. The old
-    # threshold of 100 samples was half a second and would have passed a window
-    # that connecting had eaten.
-    if [ "$POSE_N" -lt $(( RATE * 3 )) ]; then
-        warn "  Only $POSE_N samples — under 3 s of data. The capture was cut short."
-        warn "  Retry; if it keeps happening the sensor is dropping out."
-        return 1
-    fi
-
-    say "  ${green}${bold}DONE — you can move the rod now.${off}"
-    say ""
-    say "  ${dim}samples   $POSE_N  (~$(( POSE_N / RATE )) s)${off}"
-    say "  ${dim}gravity   X $POSE_X  Y $POSE_Y  Z $POSE_Z   (|acc| $POSE_MAG g)${off}"
-    say "  ${dim}stillness gyro peak $POSE_GPEAK °/s${off}"
-
-    if awk "BEGIN{exit !($POSE_GPEAK > $STILL_FAIL_DPS)}"; then
-        warn "  FAIL — the rod moved during the window (peak $POSE_GPEAK °/s)."
-        warn "  Find better footing or support and retry. A shaky pose is worse than none."
-        return 1
-    fi
-    if awk "BEGIN{exit !(($POSE_MAG - 1.0) ^ 2 > $GRAV_FAIL_G ^ 2)}"; then
-        warn "  FAIL — gravity reads $POSE_MAG g, not 1.000. Run cast check."
-        return 1
-    fi
-    if awk "BEGIN{exit !($POSE_GPEAK > $STILL_WARN_DPS)}"; then
-        warn "  warn — some movement (peak $POSE_GPEAK °/s). Usable, but steadier is better."
-    fi
-    if awk "BEGIN{exit !(($POSE_MAG - 1.0) ^ 2 > $GRAV_WARN_G ^ 2)}"; then
-        warn "  warn — gravity $POSE_MAG g is off 1.000 by more than 0.03 g."
-    fi
-    say "  ${green}ok${off}"
-    return 0
-}
-
 # Data rows written so far, header excluded.
 rows_now() {
     local r=0
@@ -277,6 +178,56 @@ phase() {
     PHASE_END=$(rows_now)
     printf '\r\033[2K  %s%s%s  done\n' "$dim" "$headline" "$off"
 }
+
+# Rod axis in the sensor's frame, from the two tip-at-sky holds.
+#
+# Mirrors CastrCore/MountCalibration.swift, which is the authority. It exists
+# here so the verdict lands while the rod is still in your hand — the browser
+# would otherwise be the first thing to tell you the axis is unusable, by which
+# time you are indoors and the mount has moved.
+#
+# Stand the blank vertical and gravity runs along it, so the reading is the
+# butt-to-tip direction outright. The pose is done twice and the axis is their
+# mean; how far apart they came out is the error bar, and it is the only figure
+# in this whole sequence that measures the axis by itself.
+#
+# Prints: spreadDeg ax ay az   (spreadDeg -1 means degenerate)
+rod_axis() {
+    awk -v ax=$1 -v ay=$2 -v az=$3 -v bx=$4 -v by=$5 -v bz=$6 'BEGIN{
+        an = sqrt(ax*ax + ay*ay + az*az); bn = sqrt(bx*bx + by*by + bz*bz)
+        if (an == 0 || bn == 0) { print "-1 0 0 0"; exit }
+        ax /= an; ay /= an; az /= an
+        bx /= bn; by /= bn; bz /= bn
+        c = ax*bx + ay*by + az*bz; if (c > 1) c = 1; if (c < -1) c = -1
+        mx = ax + bx; my = ay + by; mz = az + bz
+        mn = sqrt(mx*mx + my*my + mz*mz)
+        if (mn == 0) { print "-1 0 0 0"; exit }
+        printf "%.2f %.6f %.6f %.6f\n",
+               atan2(sqrt(1-c*c), c) * 57.29577951, mx/mn, my/mn, mz/mn
+    }'
+}
+
+# How far a level hold sits off square to the axis. Reported, never gated on: it
+# cannot tell its own tilt from the axis it is checking, which is exactly what
+# made the previous version of this impossible to pass.
+level_check() {
+    awk -v ax=$1 -v ay=$2 -v az=$3 -v lx=$4 -v ly=$5 -v lz=$6 'BEGIN{
+        an = sqrt(ax*ax + ay*ay + az*az); ln = sqrt(lx*lx + ly*ly + lz*lz)
+        if (an == 0 || ln == 0) { print "-1"; exit }
+        c = (ax*lx + ay*ly + az*lz) / (an*ln); if (c > 1) c = 1; if (c < -1) c = -1
+        d = atan2(sqrt(1-c*c), c) * 57.29577951 - 90
+        if (d < 0) d = -d
+        printf "%.2f\n", d
+    }'
+}
+
+# How far the two tip-at-sky holds may disagree before the capture is treated as
+# not having been performed. MountCalibration.swift carries the same numbers and
+# the reasoning: the pose repeated across whole sessions on 2026-08-11 held to
+# 3-9°, so 20° means one hold was not vertical rather than merely imperfect.
+AXIS_MAX_SPREAD=20
+# Above this the level hold is called out, never refused.
+LEVEL_WARN=20
 
 # Angle between two gravity vectors, in degrees.
 vec_angle() {
@@ -347,6 +298,11 @@ seq_stop() {
 }
 
 calibrate_once() {
+    # Who is holding the rod. The mount half of this sequence belongs to the
+    # rod, but the two swings are shoulder rotations that belong to the person
+    # doing them — CALIBRATION.md §2. So a calibration is stamped with a caster
+    # and a second caster needs their own, even on the same rod the same day.
+    local who="${1:-}"
     mkdir -p "$CALIB"
     local stamp; stamp=$(date '+%Y-%m-%d_%H-%M-%S')
 
@@ -358,36 +314,37 @@ calibrate_once() {
   ${dim}Three held positions with the swings between them. The script counts the
   time and tells you when to move — you never have to watch a clock.${off}
 
-    1  rod down at your side, arm hanging      hold 5 s
-    2  swing up                                the swing is measured too
-    3  arm straight up, rod tip at the sky     hold 5 s
-    4  bring the rod down to point forward
-    5  arm out, rod pointing straight ahead    hold 5 s
+    1  arm straight up, rod tip at the sky     hold 5 s
+    2  bring it down to point forward          the swing is measured too
+    3  arm out in front, rod level             hold 5 s
+    4  raise it back up to vertical
+    5  arm straight up, rod tip at the sky     hold 5 s   ← the same pose again
 EOF
 
     seq_start "$seqfile" || return 1
 
     say ""
     say "  ${dim}Read this out:${off}"
-    say "    \"Hold the rod down at your side, arm hanging straight"
-    say "     down, rod lined up along your arm. Stay still until I"
-    say "     tell you to swing.\""
+    say "    \"Raise the rod straight up, arm extended, tip at the sky."
+    say "     Sight along the blank and get it properly vertical — this"
+    say "     is the pose that measures the rod. Stay still until I tell"
+    say "     you to move.\""
     say ""
     printf '  %sPress Enter when they are in position and still →%s ' "$bold" "$off"
     read -r _
     say ""
 
-    phase "1  HOLD — rod down at your side" 5
+    phase "1  HOLD — arm straight up, tip at the sky" 5
     local a1=$PHASE_START a2=$PHASE_END
 
-    phase "2  SWING UP — one smooth movement" 3 move
+    phase "2  BRING IT DOWN TO POINT FORWARD" 3 move
 
-    phase "3  HOLD — arm straight up, tip at the sky" 5
+    phase "3  HOLD — arm out in front, rod level" 5
     local b1=$PHASE_START b2=$PHASE_END
 
-    phase "4  BRING IT DOWN TO POINT FORWARD" 3 move
+    phase "4  RAISE IT BACK UP TO VERTICAL" 3 move
 
-    phase "5  HOLD — arm out, rod straight ahead" 5
+    phase "5  HOLD — arm straight up, tip at the sky again" 5
     local c1=$PHASE_START c2=$PHASE_END
 
     seq_stop
@@ -397,14 +354,15 @@ EOF
 
     # ---- the three still windows, pulled out of the one recording ----
     local verdict=ok
-    local names="down up forward"
+    # Poses 1 and 5 are the same tip-at-sky hold done twice; pose 3 is the level
+    # one in between. d/c carry the two verticals, u the level hold.
     local dx dy dz ux uy uz cx cy cz
-    local i=0 label
-    for label in down up forward; do
+    local label
+    for label in vertical-1 level vertical-2; do
         case $label in
-        down)    set -- $(pose_stats "$SEQ_FILE" "$a1" "$a2") ;;
-        up)      set -- $(pose_stats "$SEQ_FILE" "$b1" "$b2") ;;
-        forward) set -- $(pose_stats "$SEQ_FILE" "$c1" "$c2") ;;
+        vertical-1) set -- $(pose_stats "$SEQ_FILE" "$a1" "$a2") ;;
+        level)      set -- $(pose_stats "$SEQ_FILE" "$b1" "$b2") ;;
+        vertical-2) set -- $(pose_stats "$SEQ_FILE" "$c1" "$c2") ;;
         esac
         POSE_N=$1; POSE_X=$2; POSE_Y=$3; POSE_Z=$4; POSE_MAG=$5; POSE_GMEAN=$6
 
@@ -422,9 +380,9 @@ EOF
         fi
 
         case $label in
-        down)    dx=$POSE_X; dy=$POSE_Y; dz=$POSE_Z ;;
-        up)      ux=$POSE_X; uy=$POSE_Y; uz=$POSE_Z ;;
-        forward) cx=$POSE_X; cy=$POSE_Y; cz=$POSE_Z ;;
+        vertical-1) dx=$POSE_X; dy=$POSE_Y; dz=$POSE_Z ;;
+        level)      ux=$POSE_X; uy=$POSE_Y; uz=$POSE_Z ;;
+        vertical-2) cx=$POSE_X; cy=$POSE_Y; cz=$POSE_Z ;;
         esac
     done
 
@@ -434,46 +392,69 @@ EOF
     # antiparallel vectors constrain no more than one does. The forward hold is
     # the one that carries the clocking, being the only pose with gravity across
     # the rod rather than along it. See CALIBRATION.md §2.
-    local a_du a_df a_uf
-    a_du=$(vec_angle $dx $dy $dz $ux $uy $uz)
-    a_df=$(vec_angle $dx $dy $dz $cx $cy $cz)
-    a_uf=$(vec_angle $ux $uy $uz $cx $cy $cz)
+    # The rod axis, from the two tip-at-sky holds. Their disagreement is the
+    # error bar and it is the only figure here that measures the axis alone —
+    # a level hold cannot separate its own tilt from the axis it is checking,
+    # which is what made the old gate impossible to pass. CALIBRATION.md §2.
+    local axspread axx axy axz axlevel
+    set -- $(rod_axis $dx $dy $dz $cx $cy $cz)
+    axspread=$1; axx=$2; axy=$3; axz=$4
+    # Squareness of the level hold against that averaged axis: reported, never
+    # gated on.
+    axlevel=$(level_check $axx $axy $axz $ux $uy $uz)
 
     head1 "Geometry"
-    say "  down → up        $a_du°   ${dim}expect ~180° (consistency check)${off}"
-    say "  down → forward   $a_df°   ${dim}expect ~90°${off}"
-    say "  up → forward     $a_uf°   ${dim}expect ~90°  ← this is the one that matters${off}"
+    say "  the two tip-at-sky holds are ${axspread}° apart   ${dim}this is the measurement${off}"
+    say "  level hold sits ${axlevel}° off square              ${dim}sanity only, not a gate${off}"
 
-    if awk "BEGIN{exit !($a_du < 150)}"; then
-        verdict=fail
+    local axis_ok=1 axerr
+    axerr=$(awk "BEGIN{printf \"%.2f\", $axspread / 2}")
+    if awk "BEGIN{exit !($axspread < 0 || $axspread > $AXIS_MAX_SPREAD)}"; then
+        axis_ok=0
         warn ""
-        warn "  FAIL — down and up came back only $a_du° apart, expected ~180°."
-        warn "  The rod wasn't lined up along the arm in one of them, or the arm"
-        warn "  didn't finish straight up."
+        warn "  Rod axis: NO — the two tip-at-sky holds are ${axspread}° apart,"
+        warn "  over the ${AXIS_MAX_SPREAD}° limit. One of them was not vertical."
+        warn "  This session will get a swing path but no rod tip path."
+        warn "  Redo it: sight along the blank both times and get it truly upright."
+    else
+        say ""
+        say "  ${green}Rod axis: ok${off}  ${dim}±${axerr}° — the two holds agree that closely${off}"
     fi
-    if awk "BEGIN{exit !($a_uf < 60 || $a_uf > 120)}"; then
-        verdict=fail
+
+    if awk "BEGIN{exit !($axlevel > $LEVEL_WARN)}"; then
         warn ""
-        warn "  FAIL — the forward hold is $a_uf° from the arm-up hold, expected ~90°."
-        warn "  Point the rod level and straight ahead, arm still out. This is the"
-        warn "  pose that fixes how the housing is rotated on the blank, so a sloppy"
-        warn "  one costs the whole calibration."
+        warn "  The level hold is ${axlevel}° off square to the rod. That is a smell,"
+        warn "  not a failure — it cannot tell its own tilt from the axis, so it"
+        warn "  does not touch the verdict above. Worth a steadier hold next time."
     fi
 
     cat > "$CALIB/$stamp.json" <<EOF
 {
   "captured": "$stamp",
+  "caster": $([ -n "$who" ] && printf '"%s"' "$who" || printf 'null'),
   "verdict": "$verdict",
   "sequenceCsv": "$(basename "$SEQ_FILE")",
   "holds": {
-    "down":    { "rows": [$a1, $a2], "meanAcc": [$dx, $dy, $dz] },
-    "up":      { "rows": [$b1, $b2], "meanAcc": [$ux, $uy, $uz] },
-    "forward": { "rows": [$c1, $c2], "meanAcc": [$cx, $cy, $cz] }
+    "vertical": [
+      { "rows": [$a1, $a2], "meanAcc": [$dx, $dy, $dz] },
+      { "rows": [$c1, $c2], "meanAcc": [$cx, $cy, $cz] }
+    ],
+    "level": [
+      { "rows": [$b1, $b2], "meanAcc": [$ux, $uy, $uz] }
+    ]
   },
-  "swings": { "upSwingRows": [$a2, $b1], "forwardRows": [$b2, $c1] },
-  "anglesDeg": { "downToUp": $a_du, "downToForward": $a_df, "upToForward": $a_uf },
+  "swings": { "downToLevelRows": [$a2, $b1], "backUpRows": [$b2, $c1] },
+  "anglesDeg": { "verticalSpread": $axspread, "levelOffSquare": $axlevel },
+  "rodAxis": {
+    "ok": $([ "$axis_ok" -eq 1 ] && printf 'true' || printf 'false'),
+    "axisBody": [$axx, $axy, $axz],
+    "errorDeg": $axerr,
+    "spreadDeg": $axspread,
+    "maxSpreadDeg": $AXIS_MAX_SPREAD,
+    "levelOffSquareDeg": $axlevel
+  },
   "solved": false,
-  "note": "Hold vectors and swing spans only. The TRIAD solve is not implemented — see CALIBRATION.md §2. down/up are antiparallel and cannot fix clocking; forward is the informative pose."
+  "note": "Hold vectors and swing spans. rodAxis is solved here and is the butt-to-tip direction in the sensor's frame, averaged from the two tip-at-sky holds; errorDeg is half their disagreement and is the only figure here that measures the axis alone. levelOffSquareDeg is reported and never gated on — a level hold cannot tell its own tilt from the axis it is checking. Clocking is still not implemented (CALIBRATION.md §2); the level hold is the pose that can fix it. 'solved' refers to that, not to rodAxis."
 }
 EOF
 
@@ -484,19 +465,36 @@ EOF
     fi
 
     ln -sf "$stamp.json" "$CALIB/current.json"
+    # A per-caster pointer as well: the gate before a recording asks "has this
+    # person been calibrated today", not "has anyone".
+    [ -n "$who" ] && ln -sf "$stamp.json" "$CALIB/current-$who.json"
     head1 "Done"
     say "  ${green}$CALIB/$stamp.json${off}"
-    say "  ${dim}whole sequence kept as $(basename "$SEQ_FILE") — the swings are in there too${off}"
+    say "  ${dim}whole sequence kept as $(basename "$SEQ_FILE")${off}"
+
+    # The swings are the only arm measurement there is, and fitting them is the
+    # browser's job — the lever-arm solve lives in reconstruct.js and has no
+    # Swift counterpart on purpose (CLAUDE.md). So point at the file rather than
+    # printing a number this script cannot honestly produce.
     say ""
-    say "  Now record:  ${bold}cast <person> <test>${off}"
+    say "  ${bold}Arm:${off} drop ${dim}$CALIB/$(basename "$SEQ_FILE")${off} into the analyser"
+    say "  ${dim}like any session — the swings fit a shoulder-to-sensor radius and it${off}"
+    say "  ${dim}shows in the burst table. Their row spans are in the JSON under swings.${off}"
+
+    # Only meaningful standalone; inside a recording the flow carries straight on.
+    if [ "${IN_SESSION:-0}" -eq 0 ]; then
+        say ""
+        say "  Now record:  ${bold}cast <person> <test>${off}"
+    fi
     return 0
 }
 
 # A hold can only be retried by redoing the sequence — it is one continuous
 # recording, so there is no way to splice a replacement window into the middle.
 run_calibrate() {
+    local who="${1:-}"
     while true; do
-        calibrate_once && return 0
+        calibrate_once "$who" && return 0
         say ""
         printf '  %s[Enter]%s run it again   %s[q]%s give up  > ' \
             "$bold" "$off" "$bold" "$off"
@@ -509,20 +507,27 @@ run_calibrate() {
     done
 }
 
+# Returns 1 rather than dying, for the same reason run_rod does: it runs inside
+# a session as well as standalone.
 run_profile() {
-    local person; person=$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')
-    [ -n "$person" ] || die "which person? e.g. cast profile dad"
+    local person; person=$(clean_name "${1:-}")
+    if [ -z "$person" ]; then
+        warn "  Which person? e.g. cast profile dad"
+        return 1
+    fi
     case "$person" in
-    *[!a-z0-9]*) die "person must be lowercase letters and digits only — got '$person'" ;;
+    *[!a-z0-9]*)
+        warn "  Names are lowercase letters and digits only — got '$person'."
+        return 1 ;;
     esac
 
     mkdir -p "$CALIB"
     local prof="$CALIB/profile-$person.json"
-    local sweep="$CALIB/profile-$person-sweep.csv"
 
     head1 "Profile — $person"
-    say "${dim}Once per person, not per session. These normalise across bodies; they do${off}"
-    say "${dim}not correct the sensor. See CALIBRATION.md §3.${off}"
+    say "${dim}Once per person, not per session. Typed answers only — the motion${off}"
+    say "${dim}capture that used to live here is the calibration sequence's job now.${off}"
+    say "${dim}See CALIBRATION.md §3.${off}"
 
     say ""
     printf 'Height (e.g. 5ft10 or 178cm), Enter to skip: '
@@ -532,111 +537,6 @@ run_profile() {
     printf 'Rod (make, length, weight, action if known): '
     read -r rod
 
-    say ""
-    say "${bold}Shoulder sweep${off} — optional, Enter at the prompt to skip."
-    # Retry is offered even when the capture passed its gates. Stillness is all
-    # the software can see; whether they used the elbow, leaned the trunk, or
-    # stopped short of shoulder height is visible only to the person watching.
-    while true; do
-        local swept=1
-        SWEEP_OK=0
-        SWEEP_DOWN_ROWS="null"; SWEEP_RISE_ROWS="null"; SWEEP_OUT_ROWS="null"
-
-        if seq_start "$sweep"; then
-            say ""
-            say "  ${dim}Read this out:${off}"
-            say "    \"Let your casting arm hang straight down at your side,"
-            say "     with the rod lined up along your arm. Hold it there."
-            say "     When I say raise, bring the rod straight out in front"
-            say "     of you to shoulder height — one smooth movement,"
-            say "     pivoting at the shoulder only — and hold it there."
-            say "     I'll tell you when to move and when to stop.\""
-            say ""
-            say "  ${dim}Keep the elbow out of it and don't let the trunk lean in — either${off}"
-            say "  ${dim}one is a second pivot, and it corrupts the number being measured.${off}"
-            say ""
-            printf '  %sPress Enter when the arm is down and still →%s ' "$bold" "$off"
-            read -r _
-            say ""
-
-            phase "1  HOLD — arm down at your side" 4
-            local s1=$PHASE_START s2=$PHASE_END
-
-            phase "2  RAISE — out in front to shoulder height" 4 move
-            local m1=$PHASE_START m2=$PHASE_END
-
-            phase "3  HOLD — arm out at shoulder height" 4
-            local e1=$PHASE_START e2=$PHASE_END
-
-            seq_stop
-            say ""
-
-            # The rise is the measurement; the two holds only bracket it and give
-            # the gravity reference at each end. Judge them, then report the rise.
-            local ok=1
-            set -- $(pose_stats "$sweep" "$s1" "$s2")
-            local downN=$1 downDrift=$6
-            set -- $(pose_stats "$sweep" "$e1" "$e2")
-            local outN=$1 outDrift=$6
-            set -- $(pose_stats "$sweep" "$m1" "$m2")
-            local risePeak=$7
-
-            if [ "$downN" -lt $(( RATE * 2 )) ] || [ "$outN" -lt $(( RATE * 2 )) ]; then
-                warn "  The holds came out too short — under 2 s of data."
-                ok=0
-            elif awk "BEGIN{exit !($downDrift > $HELD_FAIL_DPS)}"; then
-                warn "  The arm-down hold moved too much ($downDrift °/s) — start step 1"
-                warn "  already still, before pressing Enter."
-                ok=0
-            elif awk "BEGIN{exit !($outDrift > $HELD_FAIL_DPS)}"; then
-                warn "  The arm-out hold moved too much ($outDrift °/s) — the raise ran"
-                warn "  into step 3. Finish the movement promptly and then hold."
-                ok=0
-            fi
-            # A sweep that never really moved means they waited too long, or the
-            # arm barely travelled. Either way there is no rotation to fit.
-            if awk "BEGIN{exit !($risePeak < 20)}"; then
-                warn "  Barely any rotation in the raise (peak $risePeak °/s) — the arm"
-                warn "  didn't move during step 2, or it moved before the prompt."
-                ok=0
-            fi
-
-            if [ "$ok" -eq 1 ]; then
-                say "  ${green}${bold}DONE — you can relax.${off}"
-                say "  ${dim}down $downN samples · raise peak $risePeak °/s · out $outN samples${off}"
-                SWEEP_OK=1
-                SWEEP_DOWN_ROWS="[$s1, $s2]"
-                SWEEP_RISE_ROWS="[$m1, $m2]"
-                SWEEP_OUT_ROWS="[$e1, $e2]"
-            else
-                swept=0
-            fi
-        else
-            swept=0
-        fi
-
-        say ""
-        if [ "$swept" -eq 1 ]; then
-            printf '  %s[Enter]%s keep it   %s[r]%s do it again   %s[s]%s skip the sweep  > ' \
-                "$bold" "$off" "$bold" "$off" "$bold" "$off"
-        else
-            printf '  %s[Enter]%s try again   %s[s]%s skip the sweep  > ' \
-                "$bold" "$off" "$bold" "$off"
-        fi
-        # EOF leaves whatever the last attempt produced, so a failed capture has
-        # to be cleared here too or it would be written up as a good one.
-        read -r answer || { [ "$SWEEP_OK" -eq 1 ] || rm -f "$sweep"; break; }
-
-        case "$answer" in
-        r|R) rm -f "$sweep"; continue ;;
-        s|S) rm -f "$sweep"; warn "  Sweep skipped — the rest of the profile is still saved."; break ;;
-        *)
-            if [ "$swept" -eq 1 ]; then break; fi
-            rm -f "$sweep"
-            ;;
-        esac
-    done
-
     cat > "$prof" <<EOF
 {
   "person": "$person",
@@ -644,15 +544,298 @@ run_profile() {
   "height": "$height",
   "castingExperience": "$experience",
   "rod": "$rod",
-  "shoulderToSensorSweepCsv": $([ "$SWEEP_OK" -eq 1 ] && printf '"%s"' "$(basename "$sweep")" || printf 'null'),
-  "sweepRows": { "armDown": $SWEEP_DOWN_ROWS, "raise": $SWEEP_RISE_ROWS, "armOut": $SWEEP_OUT_ROWS },
-  "note": "Inputs only. Anthropometric height derivation is deliberately not computed — see CALIBRATION.md §3 and §5.2."
+  "note": "Typed inputs only. The shoulder sweep that used to be captured here is gone: cast calibrate's steps 2 and 4 are the same single-joint shoulder rotations at the same radius, so capturing it twice measured one thing two ways. Its row spans are in the calibration JSON under swings. Caveat carried over from CALIBRATION.md §2 — those swings belong to whoever held the rod during calibration, so in a session where one person calibrates and another casts, this profile has no arm measurement of its own. Anthropometric height derivation is still deliberately not computed — CALIBRATION.md §3 and §5.2."
 }
 EOF
 
     head1 "Done"
     say "  ${green}$prof${off}"
-    [ "$SWEEP_OK" -eq 1 ] && say "  ${dim}sweep recorded — fit the radius by loading it in the browser analyser${off}"
+    say "  ${dim}arm rotations come from cast calibrate — run that at the start of the session${off}"
+    return 0
+}
+
+# ---------------------------------------------------------------- rod
+
+# Escapes a string for embedding in JSON. Rod labels contain the inch mark by
+# nature — 9'0" — and an unescaped one produces a file nothing can read.
+json_escape() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'; }
+
+# Length in centimetres from a written measurement. Rods are sold in feet and
+# inches, the geometry needs centimetres, so both are taken — but a bare number
+# is refused rather than guessed at, because 9 and 274 are the same rod and only
+# one of them is a plausible centimetre count.
+to_cm() {
+    printf '%s' "$1" | awk '
+    {
+        s = tolower($0); gsub(/[ \t]/, "", s)
+        if (s ~ /^[0-9]+(\.[0-9]+)?cm$/)      { sub(/cm$/, "", s); printf "%.2f\n", s + 0; exit 0 }
+        if (s ~ /^[0-9]+(\.[0-9]+)?(in|")$/)  { sub(/(in|")$/, "", s); printf "%.2f\n", (s + 0) * 2.54; exit 0 }
+        if (s ~ /^[0-9]+(ft|\047)([0-9]+(\.[0-9]+)?)?(in|")?$/) {
+            p = index(s, "ft"); flen = 2
+            if (p == 0) { p = index(s, "\047"); flen = 1 }
+            ft = substr(s, 1, p - 1) + 0
+            rest = substr(s, p + flen)
+            sub(/(in|")$/, "", rest)
+            printf "%.2f\n", (ft * 12 + (rest == "" ? 0 : rest + 0)) * 2.54
+            exit 0
+        }
+        exit 1
+    }'
+}
+
+# Where the sensor sits, butt cap to the middle of the housing. Standardised at
+# 8 inches rather than measured per rod, because CAPTURE.md already demands the
+# same spot every time and a fixed number is easier to mount to than a recorded
+# one — you can put the tape on the blank once and stop thinking about it.
+#
+# It is a scale term on the tip distance and nothing else: 2 cm of error on a
+# 9 ft rod is 0.8% of the tip's radius, which is nothing beside the axis error
+# in ROD-TIP.md §2.5. What would matter is mounting somewhere else and still
+# claiming 8 inches, and that is a discipline problem, not a maths one.
+SENSOR_OFFSET_STANDARD_CM=20.32       # 8 in
+
+ask_length() {
+    # $1 prompt, $2 variable name to set. Loops until it parses or is skipped.
+    local prompt="$1" __var="$2" raw cm
+    while true; do
+        printf '%s' "$prompt"
+        read -r raw
+        if [ -z "$raw" ]; then eval "$__var=" ; return 0; fi
+        if cm=$(to_cm "$raw"); then eval "$__var=\$cm"; return 0; fi
+        warn "  Didn't understand '$raw'. Try 9ft, 9ft6, 9'6\", 274cm or 108in."
+    done
+}
+
+# Returns 1 rather than dying on bad input. This is called mid-session as well
+# as standalone, and exiting there would abandon a recording that has already
+# passed its health check because someone mistyped a rod name.
+run_rod() {
+    local name; name=$(clean_name "${1:-}")
+    if [ -z "$name" ]; then
+        warn "  Which rod? A short name with the length in it, e.g. trace9"
+        return 1
+    fi
+    case "$name" in
+    *[!a-z0-9]*)
+        warn "  Rod names are lowercase letters and digits only — got '$name'."
+        warn "  Try trace9 or clearwater86: model and length, no spaces or dashes."
+        return 1 ;;
+    esac
+
+    mkdir -p "$CALIB"
+    local file="$CALIB/rod-$name.json"
+
+    head1 "Rod — $name"
+    say "${dim}Once per rod, not per session. The tip projection needs one tape${off}"
+    say "${dim}measurement — the rod's length. The mount offset is standardised at${off}"
+    say "${dim}8 in, so take the default unless this rod can't take it. See ROD-TIP.md.${off}"
+
+    say ""
+    printf 'Make, model, length, line weight (free text): '
+    local label; read -r label
+
+    say ""
+    say "  ${dim}Measure along the blank with the rod assembled.${off}"
+    local len_cm mount_cm
+    ask_length "Rod length, butt cap to tip (9ft / 274cm), Enter to skip: " len_cm
+
+    say ""
+    say "  ${dim}The mount is standardised at 8 in from the butt cap to the middle of${off}"
+    say "  ${dim}the housing. Mount it there and take the default; give a number only${off}"
+    say "  ${dim}if this rod genuinely cannot take the sensor at 8 in.${off}"
+    ask_length "Butt cap to sensor [Enter for 8in]: " mount_cm
+    local mount_src=measured
+    if [ -z "$mount_cm" ]; then
+        mount_cm=$SENSOR_OFFSET_STANDARD_CM
+        mount_src=standard
+        say "  ${dim}using the 8 in standard — $mount_cm cm${off}"
+    fi
+
+    # A rod file is one *physical* rod, not a model. The same model comes in
+    # several lengths and they are different levers — 9ft and 8ft6 differ by
+    # 15 cm at the tip — so silently rewriting an existing rod's length would
+    # leave every session already recorded against it quietly mis-scaled.
+    if [ -e "$file" ] && [ -n "$len_cm" ]; then
+        local was; was=$(sed -n 's/.*"rodLengthCm"[[:space:]]*:[[:space:]]*\([0-9.]*\).*/\1/p' "$file")
+        if [ -n "$was" ] && awk "BEGIN{exit !(($was - $len_cm)^2 > 0.25)}"; then
+            warn ""
+            warn "  $file already exists at $was cm, and you have entered $len_cm cm."
+            warn "  If these are two different rods, give the second one its own name"
+            warn "  — trace9 and trace86, say. Overwriting rescales the tip path of"
+            warn "  every session already recorded against this one."
+            say ""
+            printf '  %s[o]%s overwrite   %s[Enter]%s stop and pick another name  > ' \
+                "$bold" "$off" "$bold" "$off"
+            read -r answer
+            case "$answer" in
+            o|O) warn "  Overwriting." ;;
+            *)   say "  Nothing saved."; return 1 ;;
+            esac
+        fi
+    fi
+
+    # The number the projection actually consumes. Left blank unless both parts
+    # are known — a tip distance derived from one measurement and a guess is
+    # worse than no tip path, because nothing downstream could tell.
+    local tip="null"
+    if [ -n "$len_cm" ] && [ -n "$mount_cm" ]; then
+        tip=$(awk "BEGIN{printf \"%.2f\", $len_cm - $mount_cm}")
+        if awk "BEGIN{exit !($tip <= 0)}"; then
+            warn ""
+            warn "  The sensor can't sit further up the blank than the rod is long."
+            warn "  Nothing saved. Check both measurements and run this again."
+            return 1
+        fi
+    fi
+
+    cat > "$file" <<EOF
+{
+  "rod": "$name",
+  "updated": "$(date '+%Y-%m-%d')",
+  "label": "$(json_escape "$label")",
+  "geometry": {
+    "rodLengthCm": ${len_cm:-null},
+    "sensorOffsetCm": ${mount_cm:-null},
+    "sensorOffsetSource": "$mount_src",
+    "tipFromSensorCm": $tip
+  },
+  "bench": {
+    "ipGrains": null,
+    "actionAngleDeg": null,
+    "ccfCpm": null,
+    "addedTipMassGrains": null,
+    "dampingRatio": null,
+    "testedOn": null
+  },
+  "note": "Geometry feeds the rod tip projection. sensorOffsetSource says whether the mount offset was measured on this rod or taken from the 8 in standard — the standard is an instruction to mount there, not an observation that you did. The bench block is the CCS static and dynamic tests (ROD-TIP.md §4) and stays blank until they are run — a class default must never be written here as though it were measured."
+}
+EOF
+
+    ln -sf "rod-$name.json" "$CALIB/current-rod.json"
+
+    head1 "Done"
+    say "  ${green}$file${off}"
+    if [ "$tip" = "null" ]; then
+        say ""
+        warn "  No tip distance — the browser analyser will not draw a tip path."
+        say "  ${dim}Both measurements are needed. Run cast rod $name again to add them.${off}"
+    else
+        say "  ${dim}sensor sits $tip cm from the tip${off}"
+    fi
+    return 0
+}
+
+# Reads a JSON array like [1, 2, 3] out of a file by key.
+json_array() {
+    sed -n "s/.*\"$2\"[[:space:]]*:[[:space:]]*\(\[[^]]*\]\).*/\1/p" "$1" | head -1
+}
+
+# Reads one number or string out of a rod file. Small enough not to want a JSON
+# parser, and the files are written by this script so the shape is known.
+rod_field() {
+    sed -n "s/.*\"$2\"[[:space:]]*:[[:space:]]*\"\{0,1\}\([^,\"}]*\)\"\{0,1\}.*/\1/p" "$1" | head -1
+}
+
+# Which rod is on the end of the line, asked once per recording.
+#
+# The rod is a property of the session, not of the app: the same model comes in
+# several lengths, they are different levers, and which one was in your hand is
+# unrecoverable a week later. So it is chosen here and copied into the session
+# sidecar rather than left to a pointer that whatever ran last happened to set.
+#
+# Sets ROD_NAME, ROD_LABEL, ROD_LENGTH_CM, ROD_OFFSET_CM, ROD_TIP_CM.
+choose_rod() {
+    ROD_NAME=""; ROD_LABEL=""; ROD_LENGTH_CM=""; ROD_OFFSET_CM=""; ROD_TIP_CM=""
+
+    local rods=() f
+    for f in "$CALIB"/rod-*.json; do [ -e "$f" ] && rods+=("$f"); done
+
+    if [ "${#rods[@]}" -eq 0 ]; then
+        warn ""
+        warn "No rod set up yet. Sessions record fine without one, but nothing can"
+        warn "draw a rod tip path until a rod is measured once."
+        printf '%s[r]%s set one up now   %s[Enter]%s carry on without it  > ' \
+            "$bold" "$off" "$bold" "$off"
+        local answer; read -r answer
+        case "$answer" in
+        r|R) local rodname retry
+             while true; do
+                 printf 'Short name for this rod, length included (e.g. trace9): '
+                 read -r rodname
+                 run_rod "$rodname" && break
+                 say ""
+                 printf '  %s[Enter]%s try again   %s[s]%s carry on without a rod  > ' \
+                     "$bold" "$off" "$bold" "$off"
+                 read -r retry
+                 case "$retry" in
+                 s|S) warn "  Carrying on. No tip path from this session."; return 0 ;;
+                 esac
+             done
+             rods=("$CALIB/rod-$(clean_name "$rodname").json") ;;
+        *)   warn "  Carrying on. No tip path from this session."; return 0 ;;
+        esac
+    fi
+
+    local pick="${rods[0]}"
+    if [ "${#rods[@]}" -gt 1 ]; then
+        # More than one rod on the shelf, so it has to be said out loud. Two
+        # lengths of the same model are the failure this exists to prevent.
+        head1 "Which rod?"
+        local i=1
+        for f in "${rods[@]}"; do
+            printf '  %s%d%s  %-14s %s cm\n' "$bold" "$i" "$off" \
+                "$(basename "$f" .json | sed 's/^rod-//')" \
+                "$(rod_field "$f" rodLengthCm)"
+            i=$(( i + 1 ))
+        done
+        say ""
+        # Re-asks rather than exiting. Mid-session is the wrong place to be
+        # strict about a keystroke.
+        local n
+        while true; do
+            printf '  %s[1-%d]%s  > ' "$bold" "${#rods[@]}" "$off"
+            read -r n
+            n=$(printf '%s' "$n" | tr -d '[:space:]')
+            case "$n" in
+            ''|*[!0-9]*) warn "  A number from the list, please." ; continue ;;
+            esac
+            if [ "$n" -ge 1 ] && [ "$n" -le "${#rods[@]}" ]; then break; fi
+            warn "  There is no rod $n on that list."
+        done
+        pick="${rods[$(( n - 1 ))]}"
+    fi
+
+    ROD_NAME=$(basename "$pick" .json | sed 's/^rod-//')
+    ROD_LABEL=$(rod_field "$pick" label)
+    ROD_LENGTH_CM=$(rod_field "$pick" rodLengthCm)
+    ROD_OFFSET_CM=$(rod_field "$pick" sensorOffsetCm)
+    ROD_TIP_CM=$(rod_field "$pick" tipFromSensorCm)
+    ln -sf "$(basename "$pick")" "$CALIB/current-rod.json"
+
+    say ""
+    # A rod file with no length is the quiet way to lose a tip path: everything
+    # else about the session works, and the projection is simply absent when you
+    # get back. Offer the tape measure now, while the rod is in your hand.
+    if [ -z "$ROD_TIP_CM" ] || [ "$ROD_TIP_CM" = null ]; then
+        warn "Rod: $ROD_NAME — no rod length recorded, so this session gets no tip path."
+        printf '  %s[Enter]%s add it now   %s[s]%s carry on without a tip path  > ' \
+            "$bold" "$off" "$bold" "$off"
+        local answer; read -r answer
+        case "$answer" in
+        s|S) warn "  Carrying on. No tip path from this session." ;;
+        *)   if run_rod "$ROD_NAME"; then
+                 pick="$CALIB/rod-$ROD_NAME.json"
+                 ROD_LABEL=$(rod_field "$pick" label)
+                 ROD_LENGTH_CM=$(rod_field "$pick" rodLengthCm)
+                 ROD_OFFSET_CM=$(rod_field "$pick" sensorOffsetCm)
+                 ROD_TIP_CM=$(rod_field "$pick" tipFromSensorCm)
+             fi ;;
+        esac
+    fi
+
+    if [ -n "$ROD_TIP_CM" ] && [ "$ROD_TIP_CM" != null ]; then
+        say "${dim}Rod: $ROD_NAME · $ROD_LENGTH_CM cm, tip $ROD_TIP_CM cm from the sensor.${off}"
+    fi
     return 0
 }
 
@@ -744,20 +927,27 @@ protocol)
 
 ${bold}CASTR — QUICK CARD${off}
 
-  1  cast profile <person>    once per person, ever
-  2  cast calibrate           start of session, and after any remount
-  3  cast <person> <test>     each recording
+  ${bold}cast <person> <test>${off}   — that is the whole thing.
 
-${bold}MOUNT${off}  above the cork handle — ${bold}same spot, same rotation, every time.${off}
-       Nothing in the software can check this for you.
+  It runs what it needs and skips what is done: profile (first time for a
+  person), rod (asked every session), calibration (first recording of the day
+  ${bold}for that caster${off}), then the recording. Each is also its own
+  command for redoing one alone:
+  cast profile <person> · cast rod <name> · cast calibrate [person]
+
+${bold}MOUNT${off}  ${bold}8 in from the butt cap${off}, above the cork — same spot, same rotation,
+       every time. Nothing in the software can check this for you, and the rod
+       tip projection assumes the 8 in.
 
 ${bold}CALIBRATE${off}  one 30 s sequence, all held in the hand. It checks the
            connection first, then counts you through. Just follow the screen.
-  1  rod down at your side, arm hanging      hold 5 s
-  2  swing up                                 (the swing is measured too)
-  3  arm straight up, rod tip at the sky     hold 5 s
-  4  bring it down to point forward
-  5  arm out, rod straight ahead and level   hold 5 s
+  1  arm straight up, rod tip at the sky     hold 5 s
+  2  bring it down to point forward           (the swing is measured too)
+  3  arm out in front, rod level             hold 5 s
+  4  raise it back up to vertical
+  5  arm straight up, tip at the sky AGAIN   hold 5 s
+     ${dim}1 and 5 are the same pose — how closely they agree is the
+     measurement, so sight along the blank both times.${off}
 
 ${bold}RECORD${off}  cast dad 20ft
   tests   updown | noline | 20ft | fish | falsecast | tagged
@@ -784,8 +974,9 @@ EOF
     exit 0
     ;;
 check)     ensure_built; run_check; exit $? ;;
-calibrate) ensure_built; run_calibrate; exit $? ;;
-profile)   ensure_built; run_profile "${2:-}"; exit $? ;;
+calibrate) ensure_built; run_calibrate "$(clean_name "${2:-}")"; exit $? ;;
+profile)   run_profile "${2:-}"; exit $? ;;   # typed answers only — nothing to build
+rod)       run_rod "${2:-}"; exit $? ;;
 list)
     head1 "Recorded sessions"
     ls -lh "$SESSIONS"/*.csv 2>/dev/null | grep -v '\.events\.csv' \
@@ -797,7 +988,21 @@ esac
 
 # ---------------------------------------------------------------- arguments
 
-PERSON=$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')
+# Calibration runs without asking, because a prompt you answer the same way
+# every time is not a choice. Skipping it stays possible for the case it exists
+# for — the mount has not moved since a calibration earlier today — but it is a
+# flag you have to mean, not a keystroke you can fumble mid-flow.
+SKIP_CALIB=0
+ARGS=()
+for a in "$@"; do
+    case "$a" in
+    --no-calibrate|--skip-calibration) SKIP_CALIB=1 ;;
+    *) ARGS+=("$a") ;;
+    esac
+done
+set -- ${ARGS+"${ARGS[@]}"}
+
+PERSON=$(clean_name "${1:-}")
 TEST=$(printf '%s' "${2:-}" | tr '[:upper:]' '[:lower:]')
 
 [ -n "$TEST" ] || { usage; die "need both a person and a test"; }
@@ -845,29 +1050,53 @@ EOF
 
 run_check || exit 1
 
-# Mount poses are per-session and per-remount. Today's are the ones that describe
-# today's mount, so anything older is treated as absent rather than as good enough.
-# current.json is only repointed on a passing calibration, so testing it — rather
-# than "is there a file from today" — is what stops a failed pose pair from
-# satisfying the gate.
-if [ -e "$CALIB/current.json" ] \
-   && case "$(readlink "$CALIB/current.json")" in "$(date '+%Y-%m-%d')"_*) true ;; *) false ;; esac; then
-    say ""
-    say "${dim}Mount poses captured today — ok.${off}"
-else
+# ---- setup, in the order it happens with a rod in your hand ----
+#
+# The health check above wanted the rod on the ground. Everything from here is
+# with it picked up, so the order is: pick it up, answer the questions, then one
+# Enter runs the whole pose sequence without stopping again.
+IN_SESSION=1
+
+head1 "Pick up the rod"
+say "  ${dim}Leave the sensor exactly where it is. Nothing else touches the mount${off}"
+say "  ${dim}from here until the session is done.${off}"
+
+# Per person, ever. Three typed answers; it exists so a stroke can be read
+# against the body that made it.
+if [ ! -e "$CALIB/profile-$PERSON.json" ]; then
     warn ""
-    warn "No mount calibration from today."
-    warn "The poses take ten seconds and are the only thing that lets this session be"
-    warn "re-referenced once the solver lands (CALIBRATION.md §2)."
+    warn "No profile for $PERSON — doing that first."
+    run_profile "$PERSON" || die "profile not saved"
+fi
+
+# Which rod, every session. Not a pointer left over from last time — see
+# choose_rod.
+choose_rod
+
+# Mount poses are per-session, per-remount, and per-caster. Today's are the ones
+# that describe today's mount; anything older is treated as absent rather than as
+# good enough. And a calibration belongs to whoever performed it — its two swings
+# are their shoulder rotations — so a second caster needs their own even on the
+# same rod the same day. current-<person>.json is only repointed on a passing
+# calibration, so testing it is also what stops a failed pose pair satisfying the
+# gate.
+if [ -e "$CALIB/current-$PERSON.json" ] \
+   && case "$(readlink "$CALIB/current-$PERSON.json")" in "$(date '+%Y-%m-%d')"_*) true ;; *) false ;; esac; then
     say ""
-    printf '%s[c]%s calibrate now   %s[s]%s skip and record anyway   %s[q]%s quit  > ' \
-        "$bold" "$off" "$bold" "$off" "$bold" "$off"
-    read -r answer
-    case "$answer" in
-    c|C|"") run_calibrate || die "calibration failed — fix it, or re-run and skip with [s]" ;;
-    s|S)    warn "Skipping. This session will not be re-referenceable." ;;
-    *)      die "stopped" ;;
-    esac
+    say "${dim}Mount poses captured today for $PERSON — ok.${off}"
+elif [ "$SKIP_CALIB" -eq 1 ]; then
+    warn ""
+    warn "Skipping calibration (--no-calibrate). No rod tip path from this"
+    warn "session, and it cannot be re-referenced later."
+else
+    say ""
+    if [ -e "$CALIB/current.json" ] \
+       && case "$(readlink "$CALIB/current.json")" in "$(date '+%Y-%m-%d')"_*) true ;; *) false ;; esac; then
+        say "${dim}There is a calibration from today, but not one $PERSON did. The mount${off}"
+        say "${dim}half would carry over; the two swings would not — they are shoulder${off}"
+        say "${dim}rotations and they belong to whoever performed them.${off}"
+    fi
+    run_calibrate "$PERSON" || die "calibration failed — fix it, or re-run with --no-calibrate"
 fi
 
 head1 "What to do"
@@ -880,7 +1109,7 @@ if [ "$TAGS" = on ]; then
 fi
 
 say ""
-say "${bold}Press Enter to connect. Wait for the GO before you start.${off}"
+say "${bold}Press Enter to start collecting. Wait for the GO before you cast.${off}"
 read -r _
 
 TAGFLAG=""
@@ -941,14 +1170,66 @@ head1 "Analysis"
 # ---------------------------------------------------------------- notes
 
 head1 "Notes"
-say "${dim}Rod, casting experience, wind, anything odd. None of this is in the CSV${off}"
-say "${dim}and none of it can be recovered later. Enter to skip.${off}"
+say "${dim}Wind, anything odd, anything you'd want to know reading this back. Caster${off}"
+say "${dim}and rod are recorded for you. None of it is in the CSV and none of it can${off}"
+say "${dim}be recovered later. Enter to skip.${off}"
 printf '> '
 read -r note
 if [ -n "$note" ]; then
     printf '%s  %-24s %s\n' "$(date '+%Y-%m-%d %H:%M')" "$NAME" "$note" >> "$SESSIONS/sessions.log"
     say "${dim}Saved to $SESSIONS/sessions.log${off}"
 fi
+
+# ---------------------------------------------------------------- session sidecar
+#
+# Who cast and what they cast with, machine-readable, one file per recording.
+#
+# It is a sidecar because CSVFormat is byte-parity with WitMotion's export and
+# does not get new columns — the same reason stroke tags live in
+# <session>.events.csv.
+#
+# The rod's numbers are *copied* here rather than referenced by name. A rod file
+# can be re-measured, a mount can move, and a pointer would then quietly rescale
+# a recording made months earlier. What was true at capture time is what the
+# session needs to keep.
+# $NAME, not "$PERSON-$TEST": a second session of the same test on the same day
+# gets a numeric suffix, and the sidecar has to follow the CSV it describes.
+SIDECAR="$SESSIONS/$NAME.session.json"
+num_or_null() { [ -n "${1:-}" ] && [ "$1" != null ] && printf '%s' "$1" || printf 'null'; }
+str_or_null() { [ -n "${1:-}" ] && printf '"%s"' "$(json_escape "$1")" || printf 'null'; }
+
+# The rod axis, copied from today's calibration. With it the sidecar carries
+# everything the tip projection needs, so the analyser can draw a tip path from
+# the session and this one file — no hunting through calibration/ for a pair of
+# JSONs that look alike.
+CAL_FILE="$CALIB/current-$PERSON.json"
+AXIS_BODY=null; AXIS_ERR=null
+if [ -e "$CAL_FILE" ]; then
+    AXIS_BODY=$(json_array "$CAL_FILE" axisBody); AXIS_BODY=${AXIS_BODY:-null}
+    AXIS_ERR=$(rod_field "$CAL_FILE" errorDeg); AXIS_ERR=${AXIS_ERR:-null}
+    # An axis the calibration itself refused must not travel as though it were good.
+    case "$(rod_field "$CAL_FILE" ok)" in false) AXIS_BODY=null; AXIS_ERR=null ;; esac
+fi
+
+cat > "$SIDECAR" <<EOF
+{
+  "session": "$NAME",
+  "recorded": "$(date '+%Y-%m-%d %H:%M:%S')",
+  "person": "$PERSON",
+  "test": "$TEST",
+  "rod": $(str_or_null "$ROD_NAME"),
+  "rodLabel": $(str_or_null "$ROD_LABEL"),
+  "rodLengthCm": $(num_or_null "$ROD_LENGTH_CM"),
+  "sensorOffsetCm": $(num_or_null "$ROD_OFFSET_CM"),
+  "tipFromSensorCm": $(num_or_null "$ROD_TIP_CM"),
+  "rodAxisBody": $AXIS_BODY,
+  "rodAxisErrorDeg": $AXIS_ERR,
+  "calibration": $(str_or_null "$([ -e "$CALIB/current-$PERSON.json" ] && readlink "$CALIB/current-$PERSON.json")"),
+  "note": $(str_or_null "$note"),
+  "about": "Written by cast at the end of the recording. Geometry and rod axis are copied, not referenced, so re-measuring a rod or recalibrating later cannot rescale this session's tip path. Drop this file into the analyser alongside the CSV and the tip path draws itself."
+}
+EOF
+say "${dim}$SIDECAR${off}"
 
 # ---------------------------------------------------------------- backup
 

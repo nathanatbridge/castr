@@ -15,6 +15,15 @@ xcuserdata/
 
 # Recorded sessions / exports
 *.csv
+
+# Session sidecars describe recordings, and the recordings are not in the repo.
+# Keep the pair together rather than committing a description of a file nobody
+# else has.
+Sessions/*.session.json
+
+# Calibration is one person's mount on one rod on one day. Same reasoning: the
+# sequence CSV it describes is already ignored above.
+calibration/
 # ...but the parity fixture is source, not a recording: the web analyser is
 # asserted against Swift's output on this exact file, and the site serves it
 # as the example session.
