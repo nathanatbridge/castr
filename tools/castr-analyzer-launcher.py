@@ -109,6 +109,14 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             return
         super().do_GET()
 
+    def end_headers(self):
+        # docs/ is rebuilt underneath a tab that is already open, so a cached
+        # copy is nearly always the stale one — and a stale analyser is worse
+        # than a slow one, because it looks like the fix did not work. Nothing
+        # served here is over 60 KB and it all comes off localhost.
+        self.send_header("Cache-Control", "no-store")
+        super().end_headers()
+
     def log_message(self, *args):
         pass  # No terminal is attached; stderr would go to Console.app as noise.
 
