@@ -33,6 +33,7 @@ enum Report {
 
         strokeTable(strokes, tags)
         consistency(strokes)
+        repeatability(strokes)
         byLabel(strokes, tags)
         untaggedNote(strokes, tags)
 
@@ -68,9 +69,10 @@ enum Report {
         print("STROKES")
         print("  " + pad("#", 3) + (labelled ? " " + pad("label", 10, right: false) : "")
               + pad("t/s", 8) + pad("dur/s", 8) + pad("arc°", 8)
-              + pad("peak°/s", 9) + pad("peak@", 7) + pad("decel°/s²", 11)
-              + pad("stop%", 7) + pad("planar%", 9) + pad("|a|g", 7))
-        print("  " + rule(labelled ? 88 : 77))
+              + pad("peak°/s", 9) + pad("peak@", 7)
+              + pad("drive°/s²", 11) + pad("decel°/s²", 11)
+              + pad("stop%", 7) + pad("plane%", 8) + pad("|a|g", 7) + pad("stop", 6))
+        print("  " + rule(labelled ? 105 : 94))
         for m in strokes {
             // An untagged stroke inside a tagged session gets a dash, not a
             // blank — a gap in the tagging should be visible, not invisible.
@@ -83,10 +85,15 @@ enum Report {
                   + pad(f(m.arcDeg, 1), 8)
                   + pad(f(m.peakRateDPS, 0), 9)
                   + pad(f(m.peakRateAtPct, 0) + "%", 7)
+                  + pad(f(m.peakAccelDPS2, 0), 11)
                   + pad(f(m.peakDecelDPS2, 0), 11)
                   + pad(f(m.stopSharePct, 0) + "%", 7)
-                  + pad(f(m.planarityPct, 1), 9)
-                  + pad(f(m.peakAccG, 2), 7))
+                  + pad(f(m.inPlanePct, 1), 8)
+                  + pad(f(m.peakAccG, 2), 7)
+                  // A blank stopping point is a fact about the recording, not a
+                  // gap in the table: the rod never came to rest after this
+                  // stroke, so there is nothing to read an attitude from.
+                  + pad(m.stopUp == nil ? "—" : "✓", 6))
         }
     }
 
@@ -181,9 +188,71 @@ enum Report {
         if let cv = SessionStats.repeatabilityCV(strokes) {
             print("")
             print("  Repeatability  " + f(cv, 1) + "%   " + verdict(cv))
-            print("  (mean spread across arc, duration, peak rate and stop deceleration —")
-            print("   lower is more alike. Planarity and peak acceleration are excluded:")
-            print("   they track the mount and geometry more than technique.)")
+            print("  (mean spread across arc, duration, peak rate, drive acceleration and")
+            print("   stop deceleration — lower is more alike. Planarity and peak")
+            print("   acceleration are excluded: they track the mount and geometry more")
+            print("   than technique.)")
+        }
+    }
+
+    /// Where the rod stopped, how it was driven there, and the plane it
+    /// travelled in — the three a coefficient of variation cannot speak for.
+    static func repeatability(_ strokes: [StrokeMetrics]) {
+        let rep = SessionStats.repeatability(strokes)
+        guard rep.plane != nil || !rep.stops.isEmpty || !rep.drive.isEmpty else { return }
+
+        print("")
+        print("REPEATABILITY")
+        print("  " + pad("measure", 27, right: false) + pad("casts", 6)
+              + pad("typical", 13) + pad("worst", 12) + "  reading")
+        print("  " + rule(80))
+
+        func angular(_ a: AngularSpread?) {
+            guard let a else { return }
+            let worst = a.worstStroke.map { f(a.maxDeg, 1) + "° #\($0)" } ?? f(a.maxDeg, 1) + "°"
+            print("  " + pad(a.name, 27, right: false)
+                  + pad(String(a.count), 6)
+                  + pad(f(a.sdDeg, 1) + "°", 13)
+                  + pad(worst, 12)
+                  + "  " + SessionStats.angularVerdict(a.sdDeg))
+        }
+        angular(rep.plane)
+        rep.stops.forEach(angular)
+        for d in rep.drive {
+            let worst = d.worstStroke.map { f(d.maxDeviationPct, 1) + "% #\($0)" }
+                ?? f(d.maxDeviationPct, 1) + "%"
+            print("  " + pad(d.name, 27, right: false)
+                  + pad(String(d.count), 6)
+                  + pad(f(d.agreementPct, 1) + "% alike", 13)
+                  + pad(worst, 12)
+                  + "  " + verdict(d.meanDeviationPct))
+        }
+
+        print("")
+        print("  Casting plane is how far each stroke's own rotation axis sits from the")
+        print("  session's — a plane that wanders is a cast that stops tracking straight.")
+        print("  Stops are the rod's attitude at the moment it came to rest, read off")
+        print("  gravity. Drive shape is how alike the rate curves are once size and")
+        print("  length are divided out, so it is the shape of the acceleration alone.")
+        print("  Stops and drive shape are split by direction because a back cast and a")
+        print("  forward cast are two different movements; which group is which is not")
+        print("  in the data.")
+
+        if rep.setAside > 0 {
+            print("")
+            print("  Measured over \(rep.castCount) cast\(rep.castCount == 1 ? "" : "s"). "
+                  + "\(rep.setAside) stroke\(rep.setAside == 1 ? " was" : "s were") set aside as")
+            print("  too small to be one — under half the median arc of the session's largest")
+            print("  third. A lift travels in its own plane, and counting it reads as a caster")
+            print("  whose plane wanders.")
+        }
+        if rep.stopsUnmeasured > 0 {
+            print("")
+            print("  \(rep.stopsUnmeasured) of \(rep.castCount) casts have no stopping point: "
+                  + "the rod never came to rest")
+            print("  after them, so there is no still moment to read an attitude from. That is")
+            print("  what continuous false casting looks like here. Left blank rather than")
+            print("  estimated.")
         }
     }
 
@@ -254,17 +323,62 @@ enum Report {
             let match = t.match(forStroke: m.index)
             let label = match.map { esc($0.label.name) } ?? "null"
             let tapOffset = match.map { n($0.offset) } ?? "null"
+            // Absent, not zeroed: a stroke the rod never settled after has no
+            // stopping point, and null is the only honest way to say so.
+            let up = m.stopUp.map { "[" + $0.map { n($0, 6) }.joined(separator: ",") + "]" }
+                ?? "null"
             return """
             {"index":\(m.index),"startTime":\(n(m.startTime)),"duration":\(n(m.duration)),\
             "samples":\(m.sampleCount),"arcDeg":\(n(m.arcDeg)),\
             "netRotationDeg":[\(m.netRotationDeg.map { n($0) }.joined(separator: ","))],\
             "pathDeg":\(n(m.pathDeg)),\
             "planarityPct":\(n(m.planarityPct)),"dominantAxis":\(esc(m.dominantAxis)),\
+            "offPlaneDeg":\(n(m.offPlaneDeg)),"inPlanePct":\(n(m.inPlanePct)),\
             "peakRateDPS":\(n(m.peakRateDPS)),"peakRateAtPct":\(n(m.peakRateAtPct)),\
             "accelPhase":\(n(m.accelPhase)),"stopPhase":\(n(m.stopPhase)),\
-            "peakDecelDPS2":\(n(m.peakDecelDPS2)),"stopSharePct":\(n(m.stopSharePct)),\
+            "peakAccelDPS2":\(n(m.peakAccelDPS2)),"peakDecelDPS2":\(n(m.peakDecelDPS2)),\
+            "driveSmoothPct":\(n(m.driveSmoothPct)),"stopSharePct":\(n(m.stopSharePct)),\
+            "rateProfile":[\(m.rateProfile.map { n($0) }.joined(separator: ","))],\
+            "stopUp":\(up),"stopStillSamples":\(m.stopStillSamples),\
             "peakAccG":\(n(m.peakAccG)),"tempo":\(n(m.tempo)),\
             "label":\(label),"tapOffset":\(tapOffset)}
+            """
+        }
+        func angularObj(_ a: AngularSpread) -> String {
+            let worst = a.worstStroke.map { String($0) } ?? "null"
+            return """
+            {"name":\(esc(a.name)),"count":\(a.count),"missing":\(a.missing),\
+            "meanDeg":\(n(a.meanDeg)),"sdDeg":\(n(a.sdDeg)),"maxDeg":\(n(a.maxDeg)),\
+            "worstStroke":\(worst),\
+            "deviationsDeg":[\(a.deviationsDeg.map { $0.map { n($0) } ?? "null" }.joined(separator: ","))]}
+            """
+        }
+        func profileObj(_ p: ProfileAgreement) -> String {
+            let worst = p.worstStroke.map { String($0) } ?? "null"
+            return """
+            {"name":\(esc(p.name)),"count":\(p.count),\
+            "meanDeviationPct":\(n(p.meanDeviationPct)),\
+            "maxDeviationPct":\(n(p.maxDeviationPct)),"agreementPct":\(n(p.agreementPct)),\
+            "worstStroke":\(worst),\
+            "deviationsPct":[\(p.deviationsPct.map { n($0) }.joined(separator: ","))],\
+            "meanProfile":[\(p.meanProfile.map { n($0) }.joined(separator: ","))]}
+            """
+        }
+        func repeatabilityObj(_ m: [StrokeMetrics]) -> String {
+            let r = SessionStats.repeatability(m)
+            let plane = r.plane.map(angularObj) ?? "null"
+            let frame = SessionStats.castingFrame(m)
+            let axis = frame.map { "[" + $0.axis.map { n($0, 6) }.joined(separator: ",") + "]" }
+                ?? "null"
+            let signs = frame.map { "[" + $0.signs.map(String.init).joined(separator: ",") + "]" }
+                ?? "null"
+            return """
+            {"plane":\(plane),\
+            "stops":[\(r.stops.map(angularObj).joined(separator: ","))],\
+            "drive":[\(r.drive.map(profileObj).joined(separator: ","))],\
+            "castCount":\(r.castCount),"setAside":\(r.setAside),\
+            "stopsUnmeasured":\(r.stopsUnmeasured),\
+            "castingAxis":\(axis),"directions":\(signs)}
             """
         }
         func spreadObj(_ s: Spread) -> String {
@@ -297,6 +411,7 @@ enum Report {
             "tagged":\(t.matches.count),\
             "strokes":[\(m.map { strokeObj($0, t) }.joined(separator: ","))],\
             "spreads":[\(SessionStats.spreads(m).map(spreadObj).joined(separator: ","))],\
+            "repeatability":\(repeatabilityObj(m)),\
             "byLabel":[\(groups.map(groupObj).joined(separator: ","))],\
             "untaggedStrokes":[\(SessionStats.untagged(m, t).map { String($0.index) }.joined(separator: ","))],\
             "unmatchedTaps":[\(t.unmatched.map(unmatchedObj).joined(separator: ","))]}

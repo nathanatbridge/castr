@@ -28,7 +28,7 @@ Live **stroke tagging** shipped and works:
 **Reversal-aware segmentation** also ships — see §5, which it resolves — along with the
 signed net rotation vector §2 is built on.
 
-Covered by `castr-selftest`. 290 checks pass.
+Covered by `castr-selftest`. 377 checks pass.
 
 ---
 
@@ -390,3 +390,106 @@ that test can invalidate it in five minutes.
 now has a controlled within-caster experiment across three people, and there is no
 consistent signal. Stage 4 takes the delivery from the tag. The corresponding gain is
 that `*-updown` sessions are self-labelling — 25 pickups and 25 deliveries, free.
+
+---
+
+## 10. Repeatability of stopping points, drive and plane
+
+Added 2026-08-11. Three things a caster repeats that the coefficient-of-variation
+table could not speak for, because they are **directions rather than sizes**: where
+the rod stops, how it is driven there, and the plane it travels in. A CV about a mean
+direction is meaningless — the mean deviation is near zero by construction — so these
+report degrees, in `AngularSpread`, and the verdict bands are separate.
+
+**Casting plane.** Each cast's own rotation axis against the session's arc-weighted
+mean, sign-folded so a back cast and the forward cast after it count as the same
+plane rather than 180° apart. Mount-independent: nothing here refers to a sensor axis.
+
+**Stopping points.** The rod's attitude at the stop, read off gravity — at the stop
+the rod is momentarily still and the accelerometer gives up-in-the-body-frame with
+nothing integrated. Two measured corrections went into it:
+
+- *The still moment is not the stop.* Read as-is, it sat a median 8.0° from the burst
+  reconstruction's attitude at the stop across the corpus. The hand keeps moving after
+  the rod has stopped. The reading is now carried back to the stop across the gyro,
+  a fraction of a second of short-baseline integration bounded at 90° of transport.
+- *A lone still-looking sample is not a window.* Abandoning the search at the first
+  one cost four of the parity fixture's seven strokes their stopping point. A short
+  run is now skipped rather than treated as a refusal. Corpus coverage went from
+  4/48 to 11/48 on `fish1` and 12/14 to 14/14 on `nathan-updown-2`.
+
+The search also stops at 60 °/s — the rate that opens a stroke. Without that it runs
+past the *next* cast and reports that one's quiet as this one's stopping point.
+
+**Drive shape.** Each cast's rate curve resampled to 16 points and divided by its own
+peak, compared against the group's average curve. Size and length are already in arc,
+duration and peak rate; what is left is shape.
+
+Stops and drive shape are split by direction (`castingFrame`, the small version of
+Stage 2) because a back cast and a forward cast stop in different places and are
+driven differently. Which group is which is still not in the data.
+
+### What the corpus says
+
+All three are measured over **casts only** — half the median arc of the largest third,
+§6's relative rule, now implemented as `SessionStats.casts`. That mattered: including
+lifts and re-positions put `fish1`'s plane spread at 46.6° and `benchtest3`'s at 26.6°.
+Restricted to casts they read 10.2° and 12.2°.
+
+| session | casts | stops read | plane sd | drive shape |
+|---|---|---|---|---|
+| `dad-updown` | 18 | 13 | **4.8°** | 93% / 87% |
+| `sam-falsecast` | 20 | 1 | 5.3° | 92% / 89% |
+| `sam-updown` | 14 | 14 | 6.3° | 85% / 88% |
+| `cast2` | 16 | 7 | 6.4° | 83% / 79% |
+| `dad-falsecast` | 20 | 1 | 7.2° | 92% / 88% |
+| `nate-updown` | 18 | 18 | 7.9° | 87% / 93% |
+| `nathan-updown-2` | 14 | 14 | 8.9° | 84% / 87% |
+| `nate-falsecast` | 20 | 10 | 10.1° | 80% / 80% |
+| `fish1` | 48 | 11 | 10.2° | 78% / 80% |
+| `benchtest2` | 32 | 18 | 10.7° | 80% / 84% |
+| `benchtest3` | 44 | 21 | 12.2° | 78% / 79% |
+| `test-updown` | 16 | 15 | 12.4° | 86% / 84% |
+| `benchtest1` | 19 | 18 | 14.6° | 83% / 81% |
+| `slow1` | 19 | 6 | **20.2°** | 80% / 81% |
+
+Plane spread runs 4.8–20.2° and stopping points 3.6–15.4°, which is where the verdict
+bands sit (5 / 10 / 15). Two independent checks that the plane figure measures what it
+claims: **the pickup is the worst cast** in `benchtest1` (59.6°, #1) and `slow1`
+(82.1°, #1), which §4 already found by another route; and in compare mode Nate's 10.1°
+against Sam's 5.3° is visible in the overhead drawings as a fanned path against a
+tight one.
+
+### Where it refuses, and why that is the finding
+
+**Continuous false casting has no measurable stopping point.** `sam-falsecast` reads
+1 of 20, `dad-falsecast` 1 of 20. The rod is turned around before it has settled, so
+there is no still moment and gravity cannot be read. This is not a threshold to be
+loosened:
+
+- Relaxing the acceleration bound is wrong outright — where those strokes slow, the
+  handle is 0.2–0.6 g off gravity. That is hand movement, not attitude.
+- Subtracting the modelled dynamic acceleration doesn't rescue it either. At the stop
+  the centripetal term vanishes but the tangential term is at its largest, and the
+  rigid-arm model's residual on real casting is 0.48–0.65, so half of several g of
+  tangential acceleration stays in the answer.
+- **The reconstruction cannot stand in for it.** It has an attitude for every sample
+  in a grounded burst, which would cover nearly the whole corpus — but measured
+  against the gravity reading it sits a **median 7.3° out, 20° at the ninth decile**,
+  with no trend in elapsed time (r = −0.04). That is gyro scale error over a burst's
+  whole integrated path, and it is larger than the 3.6–15.4° spread the figure exists
+  to measure. So the reconstruction's `stopUpBody` is computed and cross-checked
+  against Swift on the fixture by `verify-reconstruction.js` — where the two agree to
+  2.0° — and deliberately not reported.
+
+So the honest answer is a dash and a sentence telling the caster that a pause between
+casts is what makes the measurement possible. Same discipline as the ten blank CSV
+columns and the refused tip path.
+
+### What this closes and opens
+
+Closes the elevation half of **Stage 1** — rod attitude at a still moment, optional
+and blank when there is no still window, exactly as that stage specified. `restBefore`
+/`restAfter` are still open. Delivers the axis half of **Stage 2** as `castingFrame`;
+the mount-orientation test in §8.1 is still what would prove the mount-independence
+claim, and is still unrun.

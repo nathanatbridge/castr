@@ -142,9 +142,12 @@ What each stroke reports:
 |---|---|
 | Arc swept | how far the rod turned, start to finish |
 | Peak rate | fastest rotation reached, and where in the stroke it fell |
+| Drive accel | how hard the rod was got moving — what loads it |
+| Drive smooth | share of the drive spent still speeding up; a stall shows here |
 | Stop decel | how hard the rod was stopped — what unloads it |
 | Stop share | portion of the stroke spent stopping; crisp stops are small |
-| Planarity | how much of the rotation stayed in one plane |
+| In plane | share of the turning that stayed in the stroke's own plane |
+| Stopping point | which way was up when the rod stopped, or blank if it never did |
 
 ### Swing path
 
@@ -170,8 +173,31 @@ swing radius rather than invent the unobservable part.
 
 Across strokes it reports spread, flags outliers, and reduces the whole session to one
 **repeatability** figure — the mean coefficient of variation over arc, duration, peak
-rate and stop deceleration. Planarity and peak acceleration are deliberately excluded:
-they track the mount and geometry more than technique.
+rate, drive acceleration and stop deceleration. Planarity and peak acceleration are
+deliberately excluded: they track the mount and geometry more than technique.
+
+### Stopping points, drive and plane
+
+Those are all sizes. Three things a caster repeats are **directions**, and a coefficient
+of variation cannot speak for them, so they are reported separately in degrees:
+
+| Measure | Meaning |
+|---|---|
+| Casting plane | how far each cast's rotation axis sits from the session's own average |
+| Stops | how much the rod's attitude at the stop varied, read off gravity |
+| Drive shape | how alike the rate curves are, once size and length are divided out |
+
+All three are measured over casts only — a lift travels in its own plane, and counting
+it reads as a caster whose plane wanders. Stops and drive shape are split by direction,
+because a back cast and a forward cast stop in different places and are driven
+differently. Across the corpus plane spread runs 4.8–20.2° and stopping points 3.6–15.4°,
+which is where the verdict bands sit.
+
+The stopping point needs the rod to come to rest, and during continuous false casting it
+never does — so those sessions report a dash rather than an estimate. `PLAN.md` §10 has
+the measurements behind that refusal, including why the swing-path reconstruction is not
+allowed to stand in: its attitude at the stop sits a median 7.3° from the gravity reading,
+which is larger than the spread being measured.
 
 If the session was tagged, a sidecar next to the CSV is picked up automatically and
 each kind of stroke is also reported **against its own kind**:

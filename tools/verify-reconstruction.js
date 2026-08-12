@@ -219,6 +219,43 @@ if (rodBurst.length !== 1 || !rodBurst[0].tip) {
   }
 }
 
+// The stopping point, reached two independent ways.
+//
+// CastrAnalysis reads gravity off a still moment and carries it back across the
+// gyro; the reconstruction carries orientation forward from the still window
+// before the burst. On this fixture both are exact, so they have to land in the
+// same place, and a drift in either implementation shows up here.
+//
+// On real recordings they don't: measured across the corpus the two sit a
+// median 7.3° apart, 20° at the ninth decile, with no trend in elapsed time —
+// gyro scale error over a burst's whole integrated path. That is why the
+// reported stopping point is the gravity one and not this one. PLAN.md §10.
+if (fitted.length === 1) {
+  const strokes = A.analyze(session);
+  let worst = 0, compared = 0;
+  for (const seg of fitted[0].segs) {
+    const m = strokes[seg.stroke];
+    if (!m || !m.stopUp || !seg.stopUpBody) continue;
+    const d = m.stopUp[0] * seg.stopUpBody[0]
+            + m.stopUp[1] * seg.stopUpBody[1]
+            + m.stopUp[2] * seg.stopUpBody[2];
+    worst = Math.max(worst, Math.acos(Math.min(1, Math.max(-1, d))) * 180 / Math.PI);
+    compared++;
+  }
+  if (compared < 2) {
+    console.log(`  ✗ only ${compared} stroke(s) had a stopping point both ways`);
+    failures++;
+  } else {
+    // Even here they are not identical: the reconstruction integrates the
+    // burst's whole path to reach each stop while the gravity reading is
+    // carried back a fraction of a second, and that costs 2.0° at the worst
+    // stroke on an otherwise exact fixture. It is the same error that grows to
+    // 7.3° on real recordings, seen small. The bound is set just above it —
+    // anything much larger is a port that has diverged, not integration.
+    check(`stopping point agrees both ways (${compared} strokes)`, worst, 0, 3.0, "°");
+  }
+}
+
 // No rod, no tip — an absent projection rather than a guessed one.
 if (fitted.length === 1 && fitted[0].tip === null) {
   console.log("  ✓ without rod geometry no tip is reported");

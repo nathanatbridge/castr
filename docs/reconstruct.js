@@ -560,6 +560,27 @@
         if (pts[kk][1] < lo) lo = pts[kk][1];
         if (pts[kk][1] > hi) hi = pts[kk][1];
       }
+
+      // The stop: the slowest moment after the stroke's peak. Where the rod
+      // was pointing then is the stopping point a caster is trying to repeat.
+      //
+      // CastrAnalysis reads that off gravity, which needs the rod to come to
+      // rest, and at casting tempo it usually doesn't — 20 of sam-falsecast's
+      // 20 strokes have no still moment at all. Here the attitude is already
+      // known for every sample from the burst's own orientation, anchored to
+      // the still window before the burst, so the back-to-back case is covered
+      // too. It is an integrated figure rather than a direct reading, and it
+      // inherits this burst's orientation error; the two are compared on the
+      // strokes that have both by tools/verify-reconstruction.js.
+      var pk = from, st;
+      for (kk = from; kk <= to; kk++) {
+        if (rateRad(readings[a + kk]) > rateRad(readings[a + pk])) pk = kk;
+      }
+      st = pk;
+      for (kk = pk; kk <= to; kk++) {
+        if (rateRad(readings[a + kk]) < rateRad(readings[a + st])) st = kk;
+      }
+
       var seg = {
         stroke: si,
         from: from,
@@ -569,7 +590,20 @@
         arcDeg: Math.sqrt(nv[0]*nv[0] + nv[1]*nv[1] + nv[2]*nv[2]),
         sweepCm: Math.abs(dx)*100,
         outOfPlaneCm: (hi - lo)*100,
-        residual: sd > 0 ? Math.sqrt(sn/sd) : null
+        residual: sd > 0 ? Math.sqrt(sn/sd) : null,
+        stopAt: readings[a + st].t - readings[a].t,
+        // Up, in the sensor's frame, at the stop — the same quantity
+        // CastrAnalysis.stopUp reports, arrived at the other way, so the two
+        // can be held against each other. Not offered to the report: measured
+        // against stopUp across the corpus it sits a median 7.3° out and 20° at
+        // the ninth decile, with no trend in elapsed time, which is gyro scale
+        // error over a burst's whole integrated path rather than drift. The
+        // stopping-point spread being measured is 3-15°, so this version of the
+        // number is larger than its own signal. PLAN.md §10 records it.
+        //
+        // What it is good for is the fixture, where the answer is exact and the
+        // two implementations must agree — verify-reconstruction.js checks that.
+        stopUpBody: grounded ? qrot(qconj(quats[st]), [0, 0, 1]) : null
       };
 
       // Out-of-plane at the tip is tracking, which is the version of this

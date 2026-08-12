@@ -94,6 +94,8 @@
   tbody tr:last-child td{border-bottom:0}
   tbody tr:hover{background:var(--band)}
   td.flag{color:var(--s2)}
+  i.rdot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:7px;
+    vertical-align:baseline}
 
   .verdict{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap}
   .verdict .big{font-size:30px;font-weight:600;letter-spacing:-.02em}
@@ -301,8 +303,8 @@
       </div>
 
       <div class="legend">
-        <span><i style="background:var(--s1)"></i>Stroke one way</span>
-        <span><i style="background:var(--s2)"></i>Stroke the other way</span>
+        <span><i style="background:var(--s1)"></i>Backcast</span>
+        <span><i style="background:var(--s2)"></i>Forward cast</span>
         <span><i class="dot" style="background:var(--s3)"></i>Sensor, or the tip in tip view</span>
         <span><i class="dot" style="background:var(--ink-2)"></i>Pivot</span>
         <span><i style="background:var(--axis)"></i>Arm, and the rod through it</span>
@@ -343,17 +345,20 @@
         <strong>Which way is forward is assumed, not measured.</strong> Gravity fixes which
         way is up but leaves the heading free, so nothing in a handle-mounted IMU says which
         end of the swing is in front of you. Both views assume the first travelling stroke
-        of a burst is a pickup and therefore goes back. When that is wrong — a burst that
-        opens on a forward cast, say — <em>Flip forward</em> corrects it, and it turns both
-        views together rather than leaving them disagreeing. No measurement anywhere in the
-        report depends on the choice.
+        of a burst is a pickup and therefore goes back, and that assumption is what puts the
+        words <em>backcast</em> and <em>forward cast</em> on the two colours. When it is
+        wrong — a burst that opens on a forward cast, say — <em>Flip forward</em> corrects
+        the drawing, and it turns both views together rather than leaving them disagreeing;
+        the colours and their names stay as they were, so read them swapped after a flip. No
+        measurement anywhere in the report depends on the choice.
       </p>
       <p class="note">
         Colour is which way each stroke turned, measured about the burst's own rotation
-        axis. In casting the colours should alternate, because a back cast and the forward
-        cast after it are one movement run in opposite directions — so two of the same
-        colour in a row means either a missed stroke or a movement that wasn't a cast, and
-        is worth looking at rather than explaining away.
+        axis, with the first travelling stroke taken as the backcast. In casting the colours
+        should alternate, because a backcast and the forward cast after it are one movement
+        run in opposite directions — so two of the same colour in a row means either a
+        missed stroke or a movement that wasn't a cast, and is worth looking at rather than
+        explaining away.
       </p>
 
       <div class="tablewrap">
@@ -375,11 +380,12 @@
       <div class="verdict" id="verdict"></div>
       <p class="note">
         The headline is 100% minus the stroke-to-stroke spread across arc, duration, peak
-        rate and stop deceleration, so higher means your strokes repeat each other more
-        closely. Planarity and peak acceleration are excluded: they track the mount and
-        geometry more than technique. This is repeatability, not accuracy — the sensor has
-        no target to measure you against, so a session can be 95% consistent and
-        consistently wrong.
+        rate, drive acceleration and stop deceleration, so higher means your strokes repeat
+        each other more closely. Planarity and peak acceleration are excluded: they track
+        the mount and geometry more than technique. This is repeatability, not accuracy —
+        the sensor has no target to measure you against, so a session can be 95% consistent
+        and consistently wrong. Sizes only: where the rod stopped and which plane it
+        travelled in are directions, and they are measured below.
       </p>
       <div class="tablewrap">
         <table>
@@ -392,6 +398,31 @@
           <tbody id="spreads"></tbody>
         </table>
       </div>
+    </section>
+
+    <section id="repeat-section">
+      <h2>Stopping points, drive and plane</h2>
+      <p class="note">
+        Three things a caster repeats that a percentage above cannot speak for, because
+        they are directions rather than sizes: <b>where the rod stops</b>, <b>how it is
+        driven there</b>, and <b>the plane it travels in</b>. Each is measured against the
+        session's own average, so these are degrees away from your own normal, not from
+        anybody's idea of correct. Small is alike.
+      </p>
+      <div class="tablewrap">
+        <table>
+          <caption>Click a measure to read what it is. Stops and drive shape are split by
+            direction — a backcast and a forward cast stop in different places and are
+            driven differently, so mixing them would measure the gap between them rather
+            than how repeatable either one is.</caption>
+          <thead><tr>
+            <th scope="col">Measure</th><th scope="col">Casts</th>
+            <th scope="col">Typical</th><th scope="col">Worst</th><th scope="col">Reading</th>
+          </tr></thead>
+          <tbody id="repeat"></tbody>
+        </table>
+      </div>
+      <p class="note" id="repeat-note"></p>
     </section>
 
     <section>
@@ -415,12 +446,16 @@
       <h2>Strokes</h2>
       <div class="tablewrap">
         <table>
-          <caption>Stop deceleration is how hard the rod was stopped — what unloads it. Stop share is the portion of the stroke spent stopping; crisp stops are small.</caption>
+          <caption>Drive acceleration is how hard the rod was loaded, stop deceleration how
+            hard it was unloaded. Stop share is the portion of the stroke spent stopping;
+            crisp stops are small. <b>Stop</b> is whether the rod came to rest afterwards —
+            a dash means there was no still moment to read a stopping point from.</caption>
           <thead><tr>
             <th scope="col">#</th><th scope="col">t s</th><th scope="col">dur s</th>
             <th scope="col">arc °</th><th scope="col">peak °/s</th><th scope="col">peak at</th>
-            <th scope="col">stop decel °/s²</th><th scope="col">stop %</th>
-            <th scope="col">planar %</th><th scope="col">peak g</th>
+            <th scope="col">drive °/s²</th><th scope="col">stop decel °/s²</th>
+            <th scope="col">stop %</th>
+            <th scope="col">in plane %</th><th scope="col">peak g</th><th scope="col">stop</th>
           </tr></thead>
           <tbody id="strokes"></tbody>
         </table>
@@ -445,8 +480,8 @@
       </div>
       <div class="cmpgrid" id="cmp-grid"></div>
       <div class="legend">
-        <span><i style="background:var(--s1)"></i>Stroke one way</span>
-        <span><i style="background:var(--s2)"></i>Stroke the other way</span>
+        <span><i style="background:var(--s1)"></i>Backcast</span>
+        <span><i style="background:var(--s2)"></i>Forward cast</span>
         <span><i class="dot" style="background:var(--s3)"></i>Sensor</span>
         <span><i class="dot" style="background:var(--ink-2)"></i>Pivot</span>
         <span><i style="background:var(--axis)"></i>Arm</span>
@@ -660,6 +695,7 @@
     renderStrokes(primary);
     renderSwing(primary);
     renderConsistency(primary);
+    renderRepeatability(primary);
     drawTrace();
   }
 
@@ -691,8 +727,12 @@
       return "<tr><td>" + s.index + "</td><td>" + f(s.startTime, 2) + "</td><td>" +
         f(s.duration, 3) + "</td><td>" + f(s.arcDeg, 1) + "</td><td>" +
         f(s.peakRateDPS, 0) + "</td><td>" + f(s.peakRateAtPct, 0) + "%</td><td>" +
+        f(s.peakAccelDPS2, 0) + "</td><td>" +
         f(s.peakDecelDPS2, 0) + "</td><td>" + f(s.stopSharePct, 0) + "%</td><td>" +
-        f(s.planarityPct, 1) + "</td><td>" + f(s.peakAccG, 2) + "</td></tr>";
+        f(s.inPlanePct, 1) + "</td><td>" + f(s.peakAccG, 2) + "</td>" +
+        // An absent stopping point is a fact about the recording, so it is
+        // shown rather than left to be inferred from a gap in another table.
+        (s.stopUp ? "<td>✓</td>" : '<td class="flag">—</td>') + "</tr>";
     }).join("");
   }
 
@@ -703,6 +743,131 @@
 
     $("spreads").innerHTML = spreadRows(p, true);
     $("verdict").innerHTML = verdictHtml(A.repeatabilityCV(p.strokes));
+  }
+
+  /* analysis.js leaves the two directions unnamed — "one way" and "the other
+     way" — because a handle IMU cannot say which end of the swing is in front
+     of the caster. The swing path above already commits to the convention that
+     the first travelling stroke is a pickup and therefore a backcast, so the
+     table takes the same names. Renamed here rather than in analysis.js: those
+     names are held against Swift's by verify-web-parity, and the assumption is
+     the drawing's rather than the maths'. */
+  function castLabel(name) {
+    return name.replace(", one way", ", backcast")
+               .replace(", the other way", ", forward cast");
+  }
+
+  /* Colour the direction groups to match the swing path's own legend, so the
+     backcast rows in this table and the blue stroke in the drawing are visibly
+     the same set of casts. */
+  function directionDot(name) {
+    if (name.indexOf("forward cast") >= 0) {
+      return '<i class="rdot" style="background:var(--s2)"></i>';
+    }
+    if (name.indexOf("backcast") >= 0) {
+      return '<i class="rdot" style="background:var(--s1)"></i>';
+    }
+    return "";
+  }
+
+  function repeatRow(name, casts, typical, worst, reading) {
+    return "<tr>" + (METRIC_DEFS[defKey(name)]
+        ? '<td>' + directionDot(name) +
+          '<button type="button" class="metric" aria-expanded="false">' + name + "</button></td>"
+        : "<td>" + directionDot(name) + name + "</td>") +
+      "<td>" + casts + "</td><td>" + typical + "</td><td>" + worst + "</td>" +
+      "<td>" + reading + "</td></tr>" + defRow(name, 5);
+  }
+
+  /* One row per measure the session could in principle report, in a fixed
+     order, with a dash where it turned out not to be measurable.
+     
+     Fixed rather than "whatever came back", because in compare mode the
+     columns are read across and a session that is missing its stops would
+     otherwise pull every row below it out of step with its neighbours. A dash
+     is also the more useful answer: it says the measure was tried. */
+  function repeatRows(p) {
+    var rep = A.repeatability(p.strokes);
+    var casts = A.casts(p.strokes);
+    var frame = casts.length >= 2 ? A.castingFrame(casts) : null;
+    var rows = [];
+
+    function angularRow(a, name) {
+      return a
+        ? { name: name, count: a.count, typical: f(a.sdDeg, 1) + "°",
+            worst: f(a.maxDeg, 1) + '° <span class="sub">#' + a.worstStroke + "</span>",
+            reading: A.angularVerdict(a.sdDeg) }
+        : { name: name, count: "—", typical: "—", worst: "—", reading: "not measurable" };
+    }
+
+    rows.push(angularRow(rep.plane, "Casting plane"));
+
+    // A direction with fewer than two casts isn't a group at all, so it gets no
+    // row — as opposed to a group whose casts simply had no still moment.
+    ["one way", "the other way"].forEach(function (dir, k) {
+      var sign = k === 0 ? 1 : -1;
+      var n = frame ? frame.signs.filter(function (x) { return x === sign; }).length : 0;
+      if (n < 2) return;
+      var name = "Stops, " + dir;
+      var found = null;
+      rep.stops.forEach(function (a) { if (a.name === name) found = a; });
+      rows.push(angularRow(found, castLabel(name)));
+    });
+
+    rep.drive.forEach(function (d) {
+      rows.push({ name: castLabel(d.name), count: d.count,
+                  typical: f(d.agreementPct, 1) + "% alike",
+                  worst: f(d.maxDeviationPct, 1) + '% <span class="sub">#' + d.worstStroke +
+                         "</span>",
+                  reading: A.verdict(d.meanDeviationPct) });
+    });
+    return { rows: rows, rep: rep };
+  }
+
+  function repeatCompactRows(p) {
+    var built = repeatRows(p);
+    if (!built.rows.length) return null;
+    return built.rows.map(function (r) {
+      return "<tr>" + (METRIC_DEFS[defKey(r.name)]
+          ? '<td>' + directionDot(r.name) +
+            '<button type="button" class="metric" aria-expanded="false">' + r.name +
+            "</button></td>"
+          : "<td>" + directionDot(r.name) + r.name + "</td>") +
+        "<td>" + r.count + "</td><td>" + r.typical + "</td></tr>" + defRow(r.name, 3);
+    }).join("");
+  }
+
+  function renderRepeatability(p) {
+    var sec = $("repeat-section");
+    var built = repeatRows(p);
+    var rep = built.rep;
+
+    if (!built.rows.length) { sec.classList.add("hidden"); return; }
+    sec.classList.remove("hidden");
+    $("repeat").innerHTML = built.rows.map(function (r) {
+      return repeatRow(r.name, r.count, r.typical, r.worst, r.reading);
+    }).join("");
+
+    var notes = [];
+    if (rep.setAside > 0) {
+      notes.push("<b>" + rep.setAside + " stroke" + (rep.setAside === 1 ? "" : "s") +
+        " set aside</b> as too small to be a cast — under half the median arc of the " +
+        "session's largest third. Lifts and re-positions travel in their own plane, and " +
+        "counting them would read as a caster whose plane wanders. " + rep.castCount +
+        " cast" + (rep.castCount === 1 ? "" : "s") + " were measured.");
+    }
+    if (rep.stopsUnmeasured > 0) {
+      var all = rep.stopsUnmeasured === rep.castCount;
+      notes.push("<b>" + (all ? "No stopping point could be measured." : rep.stopsUnmeasured +
+        " of " + rep.castCount + " casts have no stopping point.") + "</b> " +
+        "The rod's attitude is read from gravity, which needs it to come to rest, and " +
+        (all ? "it never did" : "after these it did not") + ". Continuous false casting " +
+        "is the usual reason — the rod is turned around before it has settled. " +
+        (all ? "Pausing between casts, even briefly, is what makes this measurable."
+             : "Rows above are measured over the casts that do have one."));
+    }
+    $("repeat-note").innerHTML = notes.join(" ");
+    $("repeat-note").classList.toggle("hidden", !notes.length);
   }
 
   /* What each metric measures, and what it is for. Kept here rather than in
@@ -739,6 +904,63 @@
            "means the rod is still speeding up deep into the stroke; an early peak " +
            "means the speed was made at the front and coasted from there."
     },
+    "Drive accel": {
+      what: "The sharpest angular acceleration anywhere before the peak, in degrees " +
+            "per second squared — how hard the rod was got moving.",
+      why: "The mirror of stop deceleration, and the other half of the stroke. " +
+           "Deceleration is what unloads the rod; this is what loads it. Two casters " +
+           "can reach the same peak rate with quite different drives, and a drive that " +
+           "jumps around is a rod being bent by a different amount every cast."
+    },
+    "Drive smooth": {
+      what: "The share of the drive — start of stroke to peak rate — spent still " +
+            "speeding up. 100% is one continuous build.",
+      why: "A cast is supposed to accelerate smoothly to the stop. Anything under " +
+           "100% means the rod stopped gaining speed part way and then went again: " +
+           "a stall, or a shove late in the stroke. It says nothing about how hard " +
+           "you drove, only whether the drive was in one piece."
+    },
+    "Off-plane": {
+      what: "Degrees of rotation about axes other than the stroke's own — the turning " +
+            "that did not happen in the plane the stroke was travelling in.",
+      why: "This is the mount-independent version of planarity. It is measured against " +
+           "the axis the stroke actually turned about rather than whichever sensor axis " +
+           "happened to be largest, so unlike planarity it does not change when the " +
+           "sensor is fitted at a different angle. Rotation off the plane is the rod " +
+           "twisting or wandering out of track during the cast."
+    },
+    "Casting plane": {
+      what: "How far each cast's own rotation axis sits from the session's average, in " +
+            "degrees. The figure shown is the spread of that across the casts; the " +
+            "worst column names the cast furthest out.",
+      why: "This is whether you cast in the same plane every time. A rod that tracks " +
+           "straight travels in one plane, and a plane that moves between casts throws " +
+           "the loop off to one side. It is deliberately blind to direction — a " +
+           "backcast and the forward cast after it turn about the same line in opposite " +
+           "senses, and that is the same plane, not a 180° error. The pickup often " +
+           "shows up as the worst cast here, and genuinely is off the plane."
+    },
+    "Stops, backcast": {
+      what: "How far the rod's attitude at the stop varied across the casts going this " +
+            "way, in degrees. Attitude comes from gravity: at the stop the rod is " +
+            "momentarily still and the accelerometer reads which way is up, so nothing " +
+            "is integrated and nothing drifts.",
+      why: "Stopping in the same place every time is most of what a repeatable cast " +
+           "is — the stop is where the loop is formed, so where the rod is pointing " +
+           "then sets where the loop goes. This measures only whether you repeat " +
+           "yourself, not whether the position is a good one: the sensor has no idea " +
+           "where the rod ought to stop."
+    },
+    "Drive shape, backcast": {
+      what: "How alike the rotation-rate curves are across the casts going this way. " +
+            "Each curve is stretched to the same length and divided by its own peak " +
+            "first, so what is left is shape — the deviation from the average curve, " +
+            "turned round to read as agreement.",
+      why: "Arc, duration and peak rate say how big a cast was. This says whether it " +
+           "was made the same way: where the acceleration went in, how long it was " +
+           "held, how abruptly it ended. Two casts can match on every size number and " +
+           "still be built differently, and that difference is here."
+    },
     "Stop decel": {
       what: "The sharpest deceleration anywhere after the peak, in degrees per second " +
             "squared — how hard the rotation was killed.",
@@ -773,15 +995,20 @@
   // (CV over 100%), and "−40% consistent" would be noise dressed as a reading.
   function consistencyPct(cvPct) { return Math.max(0, 100 - cvPct); }
 
+  /* "Stops, forward cast" is the same measure as "Stops, backcast" and reads
+     the same definition. Only the direction differs, and the table already
+     says which. */
+  function defKey(name) { return name.replace(", forward cast", ", backcast"); }
+
   function metricCell(name) {
-    return METRIC_DEFS[name]
+    return METRIC_DEFS[defKey(name)]
       ? '<td><button type="button" class="metric" aria-expanded="false">' +
         name + "</button></td>"
       : "<td>" + name + "</td>";
   }
 
   function defRow(name, cols) {
-    var d = METRIC_DEFS[name];
+    var d = METRIC_DEFS[defKey(name)];
     if (!d) return "";
     return '<tr class="defrow hidden"><td colspan="' + cols + '">' + d.what +
       '<span class="why"><b>Why it matters.</b> ' + d.why + "</span></td></tr>";
@@ -1555,6 +1782,20 @@
         '<th scope="col">SD</th><th scope="col">Consistent</th>' +
         "</tr></thead><tbody>" + spreadRows(p, false) + "</tbody></table>";
       col.appendChild(wrap);
+
+      // Read across the columns like the spreads above it. Two figures only:
+      // three columns of five have no room for a worst-stroke reference that
+      // points into a table the reader isn't looking at.
+      var rows = repeatCompactRows(p);
+      if (rows) {
+        var rwrap = document.createElement("div");
+        rwrap.className = "tablewrap";
+        rwrap.innerHTML = "<table><thead><tr>" +
+          '<th scope="col">Repeats</th><th scope="col">Casts</th>' +
+          '<th scope="col">Typical</th>' +
+          "</tr></thead><tbody>" + rows + "</tbody></table>";
+        col.appendChild(rwrap);
+      }
     }
 
     grid.appendChild(col);
