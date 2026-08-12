@@ -140,6 +140,12 @@
   .chips button:hover{border-color:var(--axis)}
   .chips button[aria-pressed=true]{background:var(--s1);color:#fff;border-color:var(--s1)}
   .chips button:disabled{opacity:.4;cursor:not-allowed}
+  .rodctl{display:flex;flex-wrap:wrap;align-items:center;gap:9px 12px;padding:9px 13px;
+    margin-top:8px;background:var(--surface);border:1px solid var(--rule);border-radius:3px}
+  .filebtn{font:inherit;font-size:13px;border-radius:2px;cursor:pointer}
+  .rodstate{flex:1 1 240px;font-size:12.5px;color:var(--muted);min-width:200px}
+  .rodstate.set{color:var(--ink-2)}
+  .rodstate b{color:var(--ink-2);font-weight:600}
   .scrub{flex:1 1 220px;display:flex;align-items:center;gap:10px;min-width:180px}
   .scrub input[type=range]{width:100%;accent-color:var(--s1)}
   .clock{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px;
@@ -220,7 +226,7 @@
       <button class="ghost" id="example">Load example session</button>
     </div>
     <p class="hint">Recordings come from <code>castr-collect</code>. WitMotion app exports work too.</p>
-    <input type="file" id="file" accept=".csv,text/csv" multiple class="hidden">
+    <input type="file" id="file" accept=".csv,.json,text/csv,application/json" multiple class="hidden">
   </div>
 
   <div id="error" class="err hidden"></div>
@@ -256,11 +262,23 @@
         <button class="ghost" id="swing-play" aria-label="Play or pause">Play</button>
         <button class="ghost" id="swing-flip"
                 aria-label="Swap which direction counts as forward">Flip forward</button>
+        <button class="ghost" id="swing-tip" disabled
+                aria-label="Draw the rod tip instead of the sensor">Rod tip</button>
         <div class="scrub">
           <input type="range" id="swing-scrub" min="0" max="100" value="0" step="1"
                  aria-label="Time within the burst">
           <span class="clock" id="swing-clock">0.000 s</span>
         </div>
+      </div>
+
+      <div class="rodctl">
+        <span class="ctl-k">Rod</span>
+        <label class="ghost filebtn">
+          Load JSON
+          <input type="file" id="rod-json" accept=".json,application/json" multiple class="hidden">
+        </label>
+        <button class="ghost" id="rod-forget">Forget</button>
+        <span class="rodstate" id="rod-state">No rod — drop this session's <code>.session.json</code> in with the CSV.</span>
       </div>
 
       <div class="readout" id="swing-readout"></div>
@@ -269,7 +287,7 @@
         <div class="view">
           <div class="viewhead">
             <span class="t">Side elevation</span>
-            <span class="s">looking along the swing axis</span>
+            <span class="s">forward is to the left</span>
           </div>
           <canvas id="c-side" height="320" aria-label="Side view of the swing path"></canvas>
         </div>
@@ -285,26 +303,50 @@
       <div class="legend">
         <span><i style="background:var(--s1)"></i>Stroke one way</span>
         <span><i style="background:var(--s2)"></i>Stroke the other way</span>
-        <span><i class="dot" style="background:var(--s3)"></i>Sensor</span>
+        <span><i class="dot" style="background:var(--s3)"></i>Sensor, or the tip in tip view</span>
         <span><i class="dot" style="background:var(--ink-2)"></i>Pivot</span>
-        <span><i style="background:var(--axis)"></i>Arm</span>
+        <span><i style="background:var(--axis)"></i>Arm, and the rod through it</span>
       </div>
+
+      <p class="note">
+        <strong>The tip path is a projection, not a measurement of the tip.</strong> Give the
+        page a rod — its length, and the calibration holds — and it draws where the tip would
+        be <em>if the blank were rigid</em>. The tip is the same rigid body as the sensor,
+        further along the blank, so its position is orientation times a constant: nothing new
+        is integrated and nothing new is fitted. What it is not is where the tip really went.
+        A loaded fly rod bends by tens of centimetres through the stroke and springs back at
+        the stop, and none of that is modelled here. Read it as the rod's <em>aim</em> drawn
+        at a scale you can see — an 8° wrist break is 3&nbsp;cm at the sensor and about
+        34&nbsp;cm at the tip — rather than as the path the tip took.
+      </p>
+      <p class="note">
+        Two consequences worth knowing. The tip sits about eleven times further from the
+        pivot than the sensor, so it magnifies every orientation error by the same factor:
+        one degree is 4&nbsp;mm at the sensor and over 4&nbsp;cm out there. That is why a
+        burst with no still window before it draws its arm but refuses a tip — the sensor
+        path survives an unanchored gravity reference, and the tip path would turn those few
+        degrees into invented arc height. And the rod axis comes from two calibration holds
+        whose disagreement is its error bar, shown in the rod row in centimetres at the tip;
+        two holds that lean the <em>same</em> way agree perfectly and are both wrong, so a
+        clean error bar is not proof of a clean axis.
+      </p>
 
       <p class="note">
         Both views share one scale, so the overhead view reading as a near-straight line is
         the finding rather than a rendering choice — the swing barely leaves its plane. Grid
-        squares are 10&nbsp;cm. Seen from above the casting axis runs up the page, so a
-        forward cast goes up and a back cast goes down, and sideways wander shows as width.
+        squares are 10&nbsp;cm. The two views point the same way: seen from above the
+        casting axis runs up the page, and in the side elevation forward is to the left, so
+        a forward cast sweeps up the page from above and leftward from the side.
       </p>
 
       <p class="note">
         <strong>Which way is forward is assumed, not measured.</strong> Gravity fixes which
         way is up but leaves the heading free, so nothing in a handle-mounted IMU says which
-        end of the swing is in front of you. The view assumes the first travelling stroke of
-        a burst is a pickup and therefore goes back. When that is wrong — a burst that opens
-        on a forward cast, say — <em>Flip forward</em> corrects it. It affects this view
-        only: the side elevation reads left-to-right for legibility and claims no direction,
-        and no measurement anywhere in the report depends on the choice.
+        end of the swing is in front of you. Both views assume the first travelling stroke
+        of a burst is a pickup and therefore goes back. When that is wrong — a burst that
+        opens on a forward cast, say — <em>Flip forward</em> corrects it, and it turns both
+        views together rather than leaving them disagreeing. No measurement anywhere in the
+        report depends on the choice.
       </p>
       <p class="note">
         Colour is which way each stroke turned, measured about the burst's own rotation
@@ -514,7 +556,17 @@
   });
 
   function handleFiles(list) {
-    Array.prototype.slice.call(list, 0, MAX_SESSIONS).forEach(function (file) {
+    // JSON dropped alongside the CSV is the whole rod setup. Dragging a session
+    // and its .session.json in together is meant to be the normal way to get a
+    // tip path — the Rod row is the fallback, not the route.
+    rodHandleJSON(list, function (any) {
+      if (any && swing.session) renderSwing(swing.session);
+    });
+
+    var csvs = Array.prototype.filter.call(list, function (f) {
+      return /\.csv$/i.test(f.name);
+    });
+    csvs.slice(0, MAX_SESSIONS).forEach(function (file) {
       var reader = new FileReader();
       reader.onload = function () {
         addSession(String(reader.result), file.name.replace(/\.csv$/i, ""));
@@ -815,7 +867,215 @@
   /* ---------- swing path ---------- */
   // `flip` swaps which end of the swing axis counts as forward. The data can't
   // say — see the note in reconstruct.js — so the caster gets to correct it.
-  var swing = { rec: null, burst: null, pos: 0, timer: null, session: null, flip: false };
+  /* ---------- rod geometry ----------
+
+     The tip path needs two things the session CSV cannot carry: how far the tip
+     is from the sensor, and which way the blank points in the sensor's frame.
+     Both come off files `cast` writes — calibration/rod-<name>.json and
+     calibration/current.json — so they are loaded here and kept in
+     localStorage, because a rod does not change between sessions and nobody
+     wants to pick two files every time.
+
+     Nothing is inferred when they are absent. No rod, no tip path. */
+
+  var ROD_KEY = "castr.rod.v1";
+  var rod = null;
+
+  function rodLoad() {
+    try { rod = JSON.parse(localStorage.getItem(ROD_KEY) || "null"); }
+    catch (e) { rod = null; }
+  }
+  function rodSave() {
+    // Private browsing refuses writes. The page still works; it just forgets.
+    try {
+      if (rod) localStorage.setItem(ROD_KEY, JSON.stringify(rod));
+      else localStorage.removeItem(ROD_KEY);
+    } catch (e) {}
+  }
+
+  /* The option `reconstruct` takes, or null when the rod is not fully known. */
+  function rodOption() {
+    if (!rod || !rod.tipFromSensorM) return null;
+    if (rod.axisBody) {
+      return { tipFromSensorM: rod.tipFromSensorM, axisBody: rod.axisBody,
+               axisUncertaintyDeg: rod.axisErrorDeg || 0 };
+    }
+    if (rod.holds) return { tipFromSensorM: rod.tipFromSensorM, holds: rod.holds };
+    return null;
+  }
+
+  /* The axis as it stands, however it arrived. */
+  function rodAxisNow() {
+    if (!rod) return null;
+    if (rod.axisBody) {
+      return { ok: true, axis: rod.axisBody,
+               errorDeg: typeof rod.axisErrorDeg === "number" ? rod.axisErrorDeg : null,
+               levelCheckDeg: null, fromSidecar: true };
+    }
+    if (rod.holds) {
+      return window.CastrReconstruct.rodAxis(rod.holds.vertical, rod.holds.level);
+    }
+    return null;
+  }
+
+  function rodStatus() {
+    var el = $("rod-state");
+    if (!rod) {
+      el.className = "rodstate";
+      el.innerHTML = "No rod — drop this session's <code>.session.json</code> in with the CSV.";
+      return;
+    }
+    var bits = [], warn = [];
+    if (rod.label) bits.push("<b>" + escapeHtml(rod.label) + "</b>");
+    if (rod.tipFromSensorM) {
+      bits.push("tip " + f(rod.tipFromSensorM * 100, 0) + " cm out");
+    } else {
+      warn.push("no tip distance — load the rod JSON");
+    }
+    var ax = rodAxisNow();
+    if (!ax) {
+      warn.push("no rod axis — load the session or calibration JSON");
+    } else if (!ax.ok) {
+      warn.push("axis refused: " + ax.reason);
+    } else if (ax.errorDeg === null) {
+      // One hold, so no error bar. Saying ±0° would be a lie.
+      bits.push("axis from one hold — <b>no error bar</b>");
+    } else {
+      // How far apart the two tip-at-sky holds came out. At the tip that angle
+      // is the number that matters rather than the degrees.
+      var cm = rod.tipFromSensorM
+        ? " (" + f(ax.errorDeg * Math.PI / 180 * rod.tipFromSensorM * 100, 0) + " cm at the tip)"
+        : "";
+      bits.push("axis ±" + f(ax.errorDeg, 1) + "°" + cm);
+      if (ax.levelCheckDeg !== null && ax.levelCheckDeg > 20) {
+        warn.push("level hold " + f(ax.levelCheckDeg, 0) + "° off square — a smell, not a fault");
+      }
+    }
+    el.className = "rodstate set";
+    el.innerHTML = bits.join(" · ") +
+      (warn.length ? (bits.length ? " — " : "") + '<span class="warn">' +
+                     escapeHtml(warn.join("; ")) + "</span>" : "");
+  }
+
+  /* Works out what a JSON file is from its shape and applies it.
+     Returns a short description on success, or null if it is none of them.
+
+     There used to be two file inputs — "rod JSON" and "calibration JSON" — and
+     putting a file in the wrong one produced an error about the file rather
+     than about the mix-up. Two lookalike slots is a puzzle nobody asked for.
+     One input that reads the file and works it out is the same information with
+     none of the ceremony. */
+  function rodApplyJSON(j) {
+    rod = rod || {};
+
+    // A session sidecar carries everything at once: geometry and axis, copied
+    // at capture time. This is the one-file path.
+    if (j && j.session && (j.tipFromSensorCm || j.rodAxisBody)) {
+      var got = [];
+      if (typeof j.tipFromSensorCm === "number") {
+        rod.tipFromSensorM = j.tipFromSensorCm / 100;
+        got.push("tip " + f(j.tipFromSensorCm, 0) + " cm out");
+      }
+      if (Array.isArray(j.rodAxisBody)) {
+        rod.axisBody = j.rodAxisBody;
+        rod.axisErrorDeg = typeof j.rodAxisErrorDeg === "number" ? j.rodAxisErrorDeg : null;
+        rod.holds = null;
+        got.push("axis");
+      }
+      rod.label = j.rodLabel || j.rod || rod.label;
+      return got.length ? "session " + j.session + " — " + got.join(", ") : null;
+    }
+
+    // A rod file: geometry only.
+    if (j && j.geometry) {
+      var cm = j.geometry.tipFromSensorCm;
+      if (typeof cm !== "number" || !(cm > 0)) {
+        return { error: "that rod file has no length in it. Run `cast rod " +
+                        (j.rod || "<name>") + "` and give it the rod length." };
+      }
+      rod.tipFromSensorM = cm / 100;
+      rod.label = j.label || j.rod || rod.label;
+      return "rod " + (j.rod || "") + " — tip " + f(cm, 0) + " cm out";
+    }
+
+    // A calibration: the axis, in any of the three formats the sequence has had.
+    // Every version contained one genuine tip-at-sky hold and that hold is a
+    // real measurement; older files simply lack the second one, so they come
+    // back with no error bar rather than a fabricated zero. The poses those
+    // sequences got wrong were the other ones, and none of them are read.
+    if (j && j.holds) {
+      var h = j.holds, vertical = [], level = [];
+      if (Array.isArray(h.vertical)) {
+        h.vertical.forEach(function (v) { if (v && v.meanAcc) vertical.push(v.meanAcc); });
+        (h.level || []).forEach(function (v) { if (v && v.meanAcc) level.push(v.meanAcc); });
+      } else if (h.vertical && h.vertical.meanAcc) {
+        vertical.push(h.vertical.meanAcc);
+        ["forward", "side"].forEach(function (k) {
+          if (h[k] && h[k].meanAcc) level.push(h[k].meanAcc);
+        });
+      } else if (h.up && h.up.meanAcc) {
+        vertical.push(h.up.meanAcc);
+        if (h.forward && h.forward.meanAcc) level.push(h.forward.meanAcc);
+      }
+      if (!vertical.length) {
+        return { error: "that calibration has no tip-at-sky hold in it." };
+      }
+      rod.holds = { vertical: vertical, level: level };
+      rod.axisBody = null;
+      return "calibration " + (j.captured || "") + " — axis from " +
+             vertical.length + " hold" + (vertical.length > 1 ? "s" : "");
+    }
+
+    return { error: "that JSON is not a session, a rod or a calibration." };
+  }
+
+  /* Reads any JSON files out of a FileList and applies them. Returns true if
+     at least one was understood. */
+  function rodHandleJSON(files, done) {
+    var pending = 0, applied = [], failed = [];
+    Array.prototype.forEach.call(files, function (file) {
+      if (!/\.json$/i.test(file.name)) return;
+      pending++;
+      var reader = new FileReader();
+      reader.onload = function () {
+        var j;
+        try { j = JSON.parse(String(reader.result)); }
+        catch (e) { failed.push(file.name + " is not valid JSON"); finish(); return; }
+        var r = rodApplyJSON(j);
+        if (r && r.error) failed.push(r.error);
+        else if (r) applied.push(r);
+        else failed.push(file.name + " had nothing usable in it");
+        finish();
+      };
+      reader.onerror = function () { failed.push("could not read " + file.name); finish(); };
+      reader.readAsText(file);
+    });
+    function finish() {
+      if (--pending > 0) return;
+      if (applied.length) { rodSave(); rodStatus(); }
+      if (failed.length) showError(failed.join("; "));
+      if (done) done(applied.length > 0);
+    }
+    return pending > 0;
+  }
+
+  $("rod-json").addEventListener("change", function () {
+    var input = this;
+    rodHandleJSON(input.files, function () {
+      if (swing.session) renderSwing(swing.session);
+      input.value = "";
+    });
+  });
+
+  $("rod-forget").addEventListener("click", function () {
+    rod = null;
+    rodSave();
+    rodStatus();
+    if (swing.session) renderSwing(swing.session);
+  });
+
+  var swing = { rec: null, burst: null, pos: 0, timer: null, session: null,
+                flip: false, showTip: false };
 
   function renderSwing(p) {
     var sec = $("swing-section");
@@ -828,8 +1088,16 @@
     if (!spans.length) { sec.classList.add("hidden"); return; }
     sec.classList.remove("hidden");
 
-    swing.rec = window.CastrReconstruct.reconstruct(p.session.readings, spans);
+    swing.rec = window.CastrReconstruct.reconstruct(p.session.readings, spans,
+                                                    { rod: rodOption() });
     var bursts = swing.rec.bursts;
+
+    // The toggle only offers itself when there is something behind it.
+    var anyTip = bursts.some(function (b) { return b.ok && b.tip && b.tip.ok; });
+    var tipBtn = $("swing-tip");
+    tipBtn.disabled = !anyTip;
+    if (!anyTip) swing.showTip = false;
+    tipBtn.setAttribute("aria-pressed", String(swing.showTip));
 
     var REASONS = {
       "too slow": "never turned fast enough to identify an arm",
@@ -846,6 +1114,12 @@
         if (q === "poor") flag = true;
         if (!b.grounded) {
           notes.push("no still window — orientation not anchored");
+          flag = true;
+        }
+        // A refused tip is worth saying out loud: the arm is drawn, so the row
+        // otherwise looks entirely healthy.
+        if (b.tip && !b.tip.ok) {
+          notes.push("no tip path — " + b.tip.reason);
           flag = true;
         }
       }
@@ -929,6 +1203,14 @@
       ["Residual", b.residual === null ? "—" : f(b.residual, 2), ""],
       ["Out of plane", f(b.outOfPlaneCm, 1), "cm"]
     ];
+    // Tracking — the tip's sideways spread — is the figure a caster is taught
+    // to care about, and at the handle it is a millimetre or two.
+    if (b.tip && b.tip.ok) {
+      cells.push(["Tip radius", f(b.tip.radiusCm, 0), "cm"]);
+      cells.push(["Tip travel", f(b.tip.extentCm, 0), "cm"]);
+      cells.push(["Tracking", seg && seg.tipOutOfPlaneCm !== undefined
+                    ? f(seg.tipOutOfPlaneCm, 1) : f(b.tip.outOfPlaneCm, 1), "cm"]);
+    }
     $("swing-readout").innerHTML = cells.map(function (c) {
       return '<div class="rcell"><span class="k">' + c[0] + '</span><span class="v">' +
         c[1] + (c[2] ? "<small>" + c[2] + "</small>" : "") + "</span></div>";
@@ -952,36 +1234,46 @@
   /* Both views are drawn at one scale so the overhead view being flat means the
      swing is planar, rather than meaning the axes were stretched. */
   function drawSwingPair(sideCv, topCv, b, pos, flip) {
+    // Which body the views are drawing. The tip sits about eleven times further
+    // from the pivot than the sensor, so one scale cannot serve both — at tip
+    // scale the sensor path is a smudge near the origin. Hence a toggle rather
+    // than an overlay, with the sensor path kept as a ghost for context.
+    var showTip = swing.showTip && b.tip && b.tip.ok;
+    var P = showTip ? b.tip.pts : b.pts;
+
     var span = 0, k, j;
     for (j = 0; j < 3; j++) {
       var lo = Infinity, hi = -Infinity;
-      for (k = 0; k < b.pts.length; k++) {
-        if (b.pts[k][j] < lo) lo = b.pts[k][j];
-        if (b.pts[k][j] > hi) hi = b.pts[k][j];
+      for (k = 0; k < P.length; k++) {
+        if (P[k][j] < lo) lo = P[k][j];
+        if (P[k][j] > hi) hi = P[k][j];
       }
       if (hi - lo > span) span = hi - lo;
     }
     span = Math.max(span, 0.2) * 1.35;      // headroom, and never absurdly zoomed
 
-    // The two views answer different questions, so they are oriented
-    // independently rather than sharing one convention.
+    // Both views hang off the same forward anchor, so they agree about which
+    // end of the swing is in front of the caster.
     //
-    // Side elevation shows the shape of the arc. It reads left-to-right, which
-    // is a readability choice and makes no claim about direction — so it is
-    // tied neither to the forward anchor nor to the flip, and stays put when
-    // either changes.
-    var sideSign = b.pts[b.pts.length - 1][0] < b.pts[0][0] ? -1 : 1;
-    drawSwingView(sideCv, b, 0, 2, span, { hSign: sideSign, vSign: 1 }, pos);
-
-    // From above shows direction. The casting axis runs up the page so a
-    // forward cast reads as forward, with sideways wander either side of it —
-    // the difference between a line across the frame and a picture of where the
-    // rod went relative to the caster. Looking down the vertical reverses the
-    // sideways axis, and flipping forward is a half turn about the vertical,
-    // which reverses both.
+    // The side elevation used to mirror itself so the burst's last point landed
+    // right of its first, which read as "left to right" but was decided by
+    // where the burst happened to stop: in dad-updown and nate-updown that is a
+    // couple of centimetres of net travel across a ~50 cm swing, so the whole
+    // view flipped on noise and matched sessions disagreed with each other.
+    // Forward reads to the left here, which is the caster's request: the eye
+    // starts at the left of a panel, and that is where the cast is going.
     var fwd = flip ? -1 : 1;
+    drawSwingView(sideCv, b, 0, 2, span,
+                  { hSign: -fwd, vSign: 1, side: true, tip: showTip }, pos);
+
+    // From above shows the same anchor from the other side. The casting axis
+    // runs up the page, with sideways wander either side of it — the difference
+    // between a line across the frame and a picture of where the rod went
+    // relative to the caster. Looking down the vertical reverses the sideways
+    // axis, and flipping forward is a half turn about the vertical, which
+    // reverses both.
     drawSwingView(topCv, b, 1, 0, span,
-                  { hSign: -fwd, vSign: fwd, forward: true }, pos);
+                  { hSign: -fwd, vSign: fwd, forward: true, tip: showTip }, pos);
   }
 
   function drawSwingView(cv, b, hAxis, vAxis, span, o, pos) {
@@ -993,7 +1285,10 @@
     g.clearRect(0, 0, W, H);
     if (!b.pts.length) return;
 
-    var pts = b.pts, i;
+    // `pts` is whatever is being drawn as the path; `arm` is always the sensor,
+    // because the rod is drawn from the pivot through it to the tip and that
+    // line is the thing that makes the geometry legible.
+    var pts = o.tip ? b.tip.pts : b.pts, arm = b.pts, i;
     var hSign = o.hSign, vSign = o.vSign;
     function hv(p) { return p[hAxis]*hSign; }
 
@@ -1016,14 +1311,32 @@
     function X(p) { return cx + hv(p)*scale; }
     function Y(p) { return cy - p[vAxis]*vSign*scale; }
 
-    // 10 cm grid
-    var step = 0.10*scale;
+    // Grid. A tip view covers ten times the ground a sensor view does, so a
+    // fixed 10 cm square is either invisible there or absurd here — the square
+    // grows with the scale instead, and the caption says which one you got.
+    var GRIDS = [0.10, 0.25, 0.50, 1.00], gridM = GRIDS[GRIDS.length - 1];
+    for (i = 0; i < GRIDS.length; i++) {
+      if (GRIDS[i]*scale >= 14) { gridM = GRIDS[i]; break; }
+    }
+    var step = gridM*scale;
     if (step > 6) {
       g.strokeStyle = css("--grid"); g.lineWidth = 1;
       g.beginPath();
       for (var gx = cx % step; gx < W; gx += step) { g.moveTo(gx + 0.5, 0); g.lineTo(gx + 0.5, H); }
       for (var gy = cy % step; gy < H; gy += step) { g.moveTo(0, gy + 0.5); g.lineTo(W, gy + 0.5); }
       g.stroke();
+    }
+
+    // The sensor path, kept under the tip path so the handle's own much smaller
+    // movement stays visible for what it is.
+    if (o.tip) {
+      g.strokeStyle = css("--axis"); g.lineWidth = 1; g.globalAlpha = 0.35;
+      g.beginPath();
+      for (i = 0; i < arm.length; i++) {
+        if (i) g.lineTo(X(arm[i]), Y(arm[i])); else g.moveTo(X(arm[i]), Y(arm[i]));
+      }
+      g.stroke();
+      g.globalAlpha = 1;
     }
 
     // full path, ghosted
@@ -1049,27 +1362,48 @@
       g.stroke();
     });
 
-    // arm, pivot, sensor
-    var p = pts[pos];
+    // The rod: pivot to sensor to tip, one line through both. Drawn as one
+    // stroke because it is one rigid body — that is the whole claim the tip
+    // path rests on.
+    var p = pts[pos], a = arm[pos];
     g.strokeStyle = css("--axis"); g.lineWidth = 1.5;
-    g.beginPath(); g.moveTo(X([0,0,0]), Y([0,0,0])); g.lineTo(X(p), Y(p)); g.stroke();
+    g.beginPath();
+    g.moveTo(X([0,0,0]), Y([0,0,0]));
+    if (o.tip) g.lineTo(X(a), Y(a));
+    g.lineTo(X(p), Y(p));
+    g.stroke();
 
     g.fillStyle = css("--ink-2");
     g.beginPath(); g.arc(X([0,0,0]), Y([0,0,0]), 3.5, 0, 2*Math.PI); g.fill();
+    if (o.tip) {
+      // The sensor stays marked in the tip view — it is where the only thing
+      // actually measured on this rod is bolted.
+      g.fillStyle = css("--ink-2");
+      g.beginPath(); g.arc(X(a), Y(a), 3, 0, 2*Math.PI); g.fill();
+    }
     g.fillStyle = css("--s3");
     g.beginPath(); g.arc(X(p), Y(p), 4.5, 0, 2*Math.PI); g.fill();
 
     g.fillStyle = css("--muted");
     g.font = '10px ui-monospace, SFMono-Regular, Menlo, monospace';
-    g.fillText("10 cm grid", 6, H - 6);
+    g.fillText((gridM < 1 ? (gridM*100).toFixed(0) + " cm" : "1 m") + " grid" +
+               (o.tip ? " · rigid-blank tip" : ""), 6, H - 6);
 
-    // Only the overhead view claims a direction, so only it labels one.
-    if (o.forward) {
+    // Both views carry the anchor now, so both say which way it points.
+    if (o.forward || o.side) {
       g.fillStyle = css("--ink-2");
       g.font = '11px ui-monospace, SFMono-Regular, Menlo, monospace';
-      g.textAlign = "center";
-      g.fillText("forward ↑", W/2, 14);
-      g.fillText("↓ back", W/2, H - 6);
+      if (o.forward) {
+        g.textAlign = "center";
+        g.fillText("forward ↑", W/2, 14);
+        g.fillText("↓ back", W/2, H - 6);
+      } else {
+        // Along the top: the bottom-left corner is the grid caption's.
+        g.textAlign = "left";
+        g.fillText("← forward", 8, 14);
+        g.textAlign = "right";
+        g.fillText("back →", W - 8, 14);
+      }
       g.textAlign = "left";
     }
   }
@@ -1091,6 +1425,16 @@
     this.setAttribute("aria-pressed", String(swing.flip));
     drawSwing();
   });
+
+  $("swing-tip").addEventListener("click", function () {
+    swing.showTip = !swing.showTip;
+    this.setAttribute("aria-pressed", String(swing.showTip));
+    // The readout changes with it — tracking is a tip figure.
+    updateSwing();
+  });
+
+  rodLoad();
+  rodStatus();
 
   $("swing-play").addEventListener("click", function () {
     var b = swing.burst;
@@ -1185,7 +1529,7 @@
       col.appendChild(ctl);
 
       state.chips = chips;
-      state.side = addCompareView(col, "Side elevation", "along the swing axis");
+      state.side = addCompareView(col, "Side elevation", "forward is to the left");
       state.top = addCompareView(col, "From above", "forward is up the page");
 
       state.facts = document.createElement("div");
